@@ -1161,6 +1161,7 @@ export default function Home() {
                 signupFullName.trim() ||
                 emailInput.trim().split("@")[0] ||
                 "New User",
+              role: signupRole,
             },
           },
         });

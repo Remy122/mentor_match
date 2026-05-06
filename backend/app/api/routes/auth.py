@@ -68,7 +68,14 @@ def sync_profile(payload: ProfileSyncRequest, current_user: AuthUser = Depends(r
     existing = supabase.table("profiles").select("*").eq("id", current_user.id).limit(1).execute()
     existing_profile = existing.data[0] if existing.data else None
 
-    desired_role = payload.role or (existing_profile.get("role") if existing_profile else "mentee")
+    metadata_role = None
+    raw_user_metadata = current_user.claims.get("user_metadata")
+    if isinstance(raw_user_metadata, dict):
+        role_value = raw_user_metadata.get("role")
+        if isinstance(role_value, str):
+            metadata_role = role_value.strip().lower()
+
+    desired_role = payload.role or (existing_profile.get("role") if existing_profile else metadata_role or "mentee")
     if desired_role not in {"mentor", "mentee"}:
         desired_role = "mentee"
 
@@ -77,7 +84,6 @@ def sync_profile(payload: ProfileSyncRequest, current_user: AuthUser = Depends(r
         "role": desired_role,
     }
     metadata_full_name = None
-    raw_user_metadata = current_user.claims.get("user_metadata")
     if isinstance(raw_user_metadata, dict):
         metadata_full_name = raw_user_metadata.get("full_name")
     email_default_name = (
