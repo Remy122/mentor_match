@@ -214,17 +214,21 @@ export default function Home() {
     [selectedVolunteerId, volunteers],
   );
   const userRole = profileData?.profile?.role;
+  const approvalStatus = profileData?.profile?.approval_status;
   const isAdmin = userRole === "admin";
   const isMentee = userRole === "mentee";
   const isMentor = userRole === "mentor";
-  const isUnapprovedMentor =
-    isMentor && profileData?.profile?.approval_status !== "approved";
+  const isApproved = approvalStatus === "approved";
+  const isApprovedMentee = isMentee && isApproved;
+  const isApprovedMentor = isMentor && isApproved;
+  const isAwaitingApproval =
+    (isMentee || isMentor) && approvalStatus !== "approved";
   const showAdminDashboard = isAdmin && adminViewMode === "admin";
   const showMenteeExperience =
-    isMentee || (isAdmin && adminViewMode === "mentee");
-  const showMentorDirectory = isMentor && mentorViewMode === "directory";
-  const showMentorRequests = isMentor && mentorViewMode === "requests";
-  const showMentorMentees = isMentor && mentorViewMode === "mentees";
+    isApprovedMentee || (isAdmin && adminViewMode === "mentee");
+  const showMentorDirectory = isApprovedMentor && mentorViewMode === "directory";
+  const showMentorRequests = isApprovedMentor && mentorViewMode === "requests";
+  const showMentorMentees = isApprovedMentor && mentorViewMode === "mentees";
   const activeMenteeConnections = useMemo(
     () => mentorRequests.filter((request) => request.status === "active"),
     [mentorRequests],
@@ -758,7 +762,7 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (!isUnlocked || !isMentee) {
+    if (!isUnlocked || !isApprovedMentee) {
       setMenteeRequests([]);
       setMenteeRequestsError("");
       setIsLoadingMenteeRequests(false);
@@ -766,7 +770,7 @@ export default function Home() {
     }
 
     loadMenteeRequestsData();
-  }, [isMentee, isUnlocked]);
+  }, [isApprovedMentee, isUnlocked]);
 
   async function loadMentorRequestsData() {
     const token = window.localStorage.getItem("ocgoAccessToken");
@@ -967,7 +971,7 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (!isMentor) {
+    if (!isApprovedMentor) {
       setMentorViewMode("directory");
       setMentorRequests([]);
       setMentorRequestsError("");
@@ -1004,7 +1008,7 @@ export default function Home() {
 
     loadMentorRequestsData();
     loadMentorHoursData();
-  }, [isMentor, mentorViewMode]);
+  }, [isApprovedMentor, mentorViewMode]);
 
   async function handleAdminRequestAction(userId, action) {
     const token = window.localStorage.getItem("ocgoAccessToken");
@@ -1726,7 +1730,26 @@ export default function Home() {
               </section>
             )}
 
-            {!isProfileLoading && !profileError && isMentor && (
+            {!isProfileLoading && !profileError && isAwaitingApproval && (
+              <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
+                <p className="text-sm font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
+                  Account pending
+                </p>
+                <h3 className="mt-2 text-2xl font-bold text-[#2c2455]">
+                  Your {userRole} profile is waiting for admin approval.
+                </h3>
+                <p className="mt-2 max-w-2xl text-sm text-[#5c5385]">
+                  You can update your bio and profile picture from Settings,
+                  but mentor matching, requests, and volunteer-hour tools stay
+                  locked until an admin approves this account.
+                </p>
+                <p className="mt-4 inline-flex rounded-full bg-[#f0ecff] px-4 py-2 text-xs font-bold uppercase tracking-[0.08em] text-[#4a3c86]">
+                  Status: {approvalStatus || "pending"}
+                </p>
+              </section>
+            )}
+
+            {!isProfileLoading && !profileError && isApprovedMentor && (
               <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
                 <h3 className="text-2xl font-bold text-[#2c2455]">
                   Mentor workspace
@@ -1832,7 +1855,7 @@ export default function Home() {
                             {request.mentee_profile?.full_name || "Unnamed mentee"}
                           </p>
                           <p className="text-sm text-[#5c5385]">
-                            Status: {request.status} • Sent{" "}
+                            Status: {request.status} - Sent{" "}
                             {new Date(request.created_at).toLocaleDateString()}
                           </p>
                         </div>
@@ -1850,7 +1873,7 @@ export default function Home() {
                               : "Show request details"
                           }
                         >
-                          {expandedMentorRequestId === request.id ? "▴" : "▾"}
+                          {expandedMentorRequestId === request.id ? "Hide" : "Show"}
                         </button>
                       </div>
 
@@ -2167,7 +2190,7 @@ export default function Home() {
                           className="rounded-xl border border-[#e5e0f4] bg-white p-3 text-sm text-[#4f4578]"
                         >
                           <p className="font-bold text-[#2c2455]">
-                            {new Date(entry.meeting_date).toLocaleDateString()} •{" "}
+                            {new Date(entry.meeting_date).toLocaleDateString()} -{" "}
                             {entry.hours} hours
                           </p>
                           <p>
@@ -2340,7 +2363,7 @@ export default function Home() {
                           className="rounded-xl border border-[#e5e0f4] bg-white p-3 text-sm text-[#4f4578]"
                         >
                           <p className="font-bold text-[#2c2455]">
-                            {new Date(entry.meeting_date).toLocaleDateString()} •{" "}
+                            {new Date(entry.meeting_date).toLocaleDateString()} -{" "}
                             {entry.hours} hours
                           </p>
                           <p>
@@ -2397,7 +2420,7 @@ export default function Home() {
                               {user.full_name || "Unnamed user"}
                             </p>
                             <p className="text-sm text-[#5c5385]">
-                              {user.role} request • submitted{" "}
+                              {user.role} request - submitted{" "}
                               {new Date(user.created_at).toLocaleDateString()}
                             </p>
                             {user.bio && (
@@ -2442,8 +2465,8 @@ export default function Home() {
                               }
                             >
                               {adminSelectedPendingUser?.id === user.id
-                                ? "▴"
-                                : "▾"}
+                                ? "Hide"
+                                : "Show"}
                             </button>
                           </div>
                         </div>
@@ -2545,7 +2568,7 @@ export default function Home() {
                               {user.full_name || "Unnamed user"}
                             </p>
                             <p className="text-sm text-[#5c5385]">
-                              {user.role} • {user.approval_status} • submitted{" "}
+                              {user.role} - {user.approval_status} - submitted{" "}
                               {new Date(user.created_at).toLocaleDateString()}
                             </p>
                             {user.bio && (
@@ -2590,8 +2613,8 @@ export default function Home() {
                               }
                             >
                               {adminSelectedReviewedUser?.id === user.id
-                                ? "▴"
-                                : "▾"}
+                                ? "Hide"
+                                : "Show"}
                             </button>
                           </div>
                         </div>
@@ -2743,7 +2766,7 @@ export default function Home() {
                                 "Unnamed mentor"}
                             </p>
                             <p className="text-sm text-[#5c5385]">
-                              Status: {adminSelectedMentor.approval_status} •{" "}
+                              Status: {adminSelectedMentor.approval_status} -{" "}
                               {adminSelectedMentor.is_visible
                                 ? "Visible"
                                 : "Hidden"}
@@ -2808,7 +2831,7 @@ export default function Home() {
                                         "Unnamed mentee"}
                                     </p>
                                     <p className="text-xs text-[#5c5385]">
-                                      {request.status} •{" "}
+                                      {request.status} -{" "}
                                       {new Date(
                                         request.created_at,
                                       ).toLocaleDateString()}
@@ -2975,20 +2998,17 @@ export default function Home() {
                   {filteredVolunteers.length === 0 && (
                     <article className="rounded-3xl border border-dashed border-[#d7d2ea] bg-white p-6 md:col-span-2">
                       <h4 className="text-lg font-bold text-[#2c2455]">
-                        {isUnapprovedMentor
-                          ? "Your account must be verified first"
-                          : "No volunteers match this filter"}
+                        No volunteers match this filter
                       </h4>
                       <p className="mt-2 text-sm text-[#5c5385]">
-                        {isUnapprovedMentor
-                          ? "A mentor profile must be approved by an admin before you can view volunteer matches."
-                          : "Try clearing your search, changing filters, or checking your backend token and mentor visibility settings."}
+                        Try clearing your search, changing filters, or checking
+                        your backend token and mentor visibility settings.
                       </p>
                     </article>
                   )}
                 </section>
 
-                {isMentee && (
+                {isApprovedMentee && (
                   <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
                     <div className="flex items-center justify-between gap-2">
                       <div>
@@ -3037,7 +3057,7 @@ export default function Home() {
                             {request.mentor_profile?.full_name || "Unknown mentor"}
                           </p>
                           <p className="text-sm text-[#5c5385]">
-                            Status: {request.status} • Sent{" "}
+                            Status: {request.status} - Sent{" "}
                             {new Date(request.created_at).toLocaleDateString()}
                           </p>
                           {request.status === "active" && request.mentor_email && (
@@ -3238,7 +3258,7 @@ export default function Home() {
 
               {profileData?.profile?.role && (
                 <p className="mt-4 inline-flex rounded-full bg-[#f0ecff] px-4 py-2 text-xs font-bold text-[#4a3c86]">
-                  {profileData.profile.role} •{" "}
+                  {profileData.profile.role} -{" "}
                   {profileData.profile.approval_status}
                 </p>
               )}
