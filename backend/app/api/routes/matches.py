@@ -1,49 +1,40 @@
-from typing import Any, Literal
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from postgrest.exceptions import APIError
 
 from app.core.auth import AuthUser, require_admin_role, require_auth
 from app.core.config import settings
 from app.core.email import send_email
+from app.core.profiles import get_auth_email, get_profile, get_profiles_by_ids
 from app.core.supabase import get_supabase_client
+from app.schemas.matches import MatchRequestPayload, MentorDecisionPayload
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 
 
-class MatchRequestPayload(BaseModel):
-    mentor_id: str
-    care_type: str
-    message: str
-
-
-class MentorDecisionPayload(BaseModel):
-    decision: Literal["accept", "reject"]
-    message: str | None = None
-
-
-def _get_profile(user_id: str) -> dict[str, Any] | None:
-    supabase = get_supabase_client()
-    result = supabase.table("profiles").select("*").eq("id", user_id).limit(1).execute()
-    return result.data[0] if result.data else None
-
-
-def _get_auth_email(user_id: str) -> str | None:
-    supabase = get_supabase_client()
-    try:
-        result = supabase.auth.admin.get_user_by_id(user_id)
-        user = getattr(result, "user", None)
-        return getattr(user, "email", None)
-    except Exception:
-        return None
+def _queue_emails(
+    background_tasks: BackgroundTasks,
+    recipients: list[str | None],
+    subject: str,
+    html: str,
+    reply_to: str | None = None,
+) -> None:
+    for recipient in dict.fromkeys(email for email in recipients if email):
+        background_tasks.add_task(
+            send_email,
+            recipient,
+            subject,
+            html,
+            reply_to=reply_to,
+        )
 
 
 @router.get("/mentors/available")
 def get_available_mentors(current_user: AuthUser = Depends(require_auth)) -> dict[str, list[dict[str, Any]]]:
     supabase = get_supabase_client()
 
-    requester = _get_profile(current_user.id)
+    requester = get_profile(supabase, current_user.id)
     if not requester:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
     is_approved_mentee = requester["role"] == "mentee" and requester["approval_status"] == "approved"
@@ -71,7 +62,7 @@ def get_available_mentors(current_user: AuthUser = Depends(require_auth)) -> dic
 def get_mentor_requests(current_user: AuthUser = Depends(require_auth)) -> dict[str, list[dict[str, Any]]]:
     supabase = get_supabase_client()
 
-    requester = _get_profile(current_user.id)
+    requester = get_profile(supabase, current_user.id)
     if not requester:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
     if requester["role"] != "mentor" or requester["approval_status"] != "approved":
@@ -80,37 +71,20 @@ def get_mentor_requests(current_user: AuthUser = Depends(require_auth)) -> dict[
             detail="Only approved mentors can view incoming mentee requests.",
         )
 
-    try:
-        matches_result = (
-            supabase.table("matches")
-            .select("id,mentor_id,mentee_id,status,care_type,request_message,created_at")
-            .eq("mentor_id", current_user.id)
-            .order("created_at", desc=True)
-            .execute()
-        )
-    except APIError as exc:
-        message = str(exc)
-        if "matches.care_type" not in message and "matches.request_message" not in message:
-            raise
-        matches_result = (
-            supabase.table("matches")
-            .select("id,mentor_id,mentee_id,status,created_at")
-            .eq("mentor_id", current_user.id)
-            .order("created_at", desc=True)
-            .execute()
-        )
+    matches_result = (
+        supabase.table("matches")
+        .select("id,mentor_id,mentee_id,status,care_type,created_at")
+        .eq("mentor_id", current_user.id)
+        .order("created_at", desc=True)
+        .execute()
+    )
     matches = matches_result.data or []
 
-    mentee_ids = [match["mentee_id"] for match in matches]
-    mentee_profiles: dict[str, Any] = {}
-    if mentee_ids:
-        profiles_result = (
-            supabase.table("profiles")
-            .select("id,full_name,bio,profile_picture_url,approval_status")
-            .in_("id", mentee_ids)
-            .execute()
-        )
-        mentee_profiles = {profile["id"]: profile for profile in (profiles_result.data or [])}
+    mentee_profiles = get_profiles_by_ids(
+        supabase,
+        (match.get("mentee_id") for match in matches),
+        "id,full_name,bio,profile_picture_url,approval_status",
+    )
 
     enriched = []
     for match in matches:
@@ -118,7 +92,11 @@ def get_mentor_requests(current_user: AuthUser = Depends(require_auth)) -> dict[
             {
                 **match,
                 "mentee_profile": mentee_profiles.get(match["mentee_id"]),
-                "mentee_email": _get_auth_email(match["mentee_id"]),
+                "mentee_email": (
+                    get_auth_email(supabase, match["mentee_id"])
+                    if match.get("status") == "active"
+                    else None
+                ),
             }
         )
 
@@ -129,7 +107,7 @@ def get_mentor_requests(current_user: AuthUser = Depends(require_auth)) -> dict[
 def get_my_requests(current_user: AuthUser = Depends(require_auth)) -> dict[str, list[dict[str, Any]]]:
     supabase = get_supabase_client()
 
-    requester = _get_profile(current_user.id)
+    requester = get_profile(supabase, current_user.id)
     if not requester:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
     if requester["role"] != "mentee" or requester["approval_status"] != "approved":
@@ -138,37 +116,20 @@ def get_my_requests(current_user: AuthUser = Depends(require_auth)) -> dict[str,
             detail="Only approved mentees can view submitted requests.",
         )
 
-    try:
-        matches_result = (
-            supabase.table("matches")
-            .select("id,mentor_id,mentee_id,status,care_type,request_message,created_at")
-            .eq("mentee_id", current_user.id)
-            .order("created_at", desc=True)
-            .execute()
-        )
-    except APIError as exc:
-        message = str(exc)
-        if "matches.care_type" not in message and "matches.request_message" not in message:
-            raise
-        matches_result = (
-            supabase.table("matches")
-            .select("id,mentor_id,mentee_id,status,created_at")
-            .eq("mentee_id", current_user.id)
-            .order("created_at", desc=True)
-            .execute()
-        )
+    matches_result = (
+        supabase.table("matches")
+        .select("id,mentor_id,mentee_id,status,care_type,created_at")
+        .eq("mentee_id", current_user.id)
+        .order("created_at", desc=True)
+        .execute()
+    )
     requests = matches_result.data or []
 
-    mentor_ids = [request["mentor_id"] for request in requests]
-    mentor_profiles: dict[str, Any] = {}
-    if mentor_ids:
-        mentors_result = (
-            supabase.table("profiles")
-            .select("id,full_name,bio,profile_picture_url,approval_status")
-            .in_("id", mentor_ids)
-            .execute()
-        )
-        mentor_profiles = {mentor["id"]: mentor for mentor in (mentors_result.data or [])}
+    mentor_profiles = get_profiles_by_ids(
+        supabase,
+        (request.get("mentor_id") for request in requests),
+        "id,full_name,bio,profile_picture_url,approval_status",
+    )
 
     enriched = []
     for request in requests:
@@ -176,7 +137,11 @@ def get_my_requests(current_user: AuthUser = Depends(require_auth)) -> dict[str,
             {
                 **request,
                 "mentor_profile": mentor_profiles.get(request["mentor_id"]),
-                "mentor_email": _get_auth_email(request["mentor_id"]),
+                "mentor_email": (
+                    get_auth_email(supabase, request["mentor_id"])
+                    if request.get("status") == "active"
+                    else None
+                ),
             }
         )
 
@@ -201,37 +166,20 @@ def get_mentor_requests_for_admin(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mentor not found.")
     mentor = mentor_result.data[0]
 
-    try:
-        matches_result = (
-            supabase.table("matches")
-            .select("id,mentor_id,mentee_id,status,care_type,request_message,created_at")
-            .eq("mentor_id", mentor_id)
-            .order("created_at", desc=True)
-            .execute()
-        )
-    except APIError as exc:
-        message = str(exc)
-        if "matches.care_type" not in message and "matches.request_message" not in message:
-            raise
-        matches_result = (
-            supabase.table("matches")
-            .select("id,mentor_id,mentee_id,status,created_at")
-            .eq("mentor_id", mentor_id)
-            .order("created_at", desc=True)
-            .execute()
-        )
+    matches_result = (
+        supabase.table("matches")
+        .select("id,mentor_id,mentee_id,status,care_type,created_at")
+        .eq("mentor_id", mentor_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
     matches = matches_result.data or []
 
-    mentee_ids = [match["mentee_id"] for match in matches]
-    mentee_profiles: dict[str, Any] = {}
-    if mentee_ids:
-        profiles_result = (
-            supabase.table("profiles")
-            .select("id,full_name,bio,profile_picture_url,approval_status")
-            .in_("id", mentee_ids)
-            .execute()
-        )
-        mentee_profiles = {profile["id"]: profile for profile in (profiles_result.data or [])}
+    mentee_profiles = get_profiles_by_ids(
+        supabase,
+        (match.get("mentee_id") for match in matches),
+        "id,full_name,bio,profile_picture_url,approval_status",
+    )
 
     enriched_requests = [
         {
@@ -244,11 +192,15 @@ def get_mentor_requests_for_admin(
 
 
 @router.post("/requests")
-def create_match_request(payload: MatchRequestPayload, current_user: AuthUser = Depends(require_auth)) -> dict[str, Any]:
+def create_match_request(
+    payload: MatchRequestPayload,
+    background_tasks: BackgroundTasks,
+    current_user: AuthUser = Depends(require_auth),
+) -> dict[str, Any]:
     supabase = get_supabase_client()
 
-    mentee = _get_profile(current_user.id)
-    mentor = _get_profile(payload.mentor_id)
+    mentee = get_profile(supabase, current_user.id)
+    mentor = get_profile(supabase, payload.mentor_id)
 
     if not mentee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mentee profile not found.")
@@ -259,6 +211,20 @@ def create_match_request(payload: MatchRequestPayload, current_user: AuthUser = 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mentor profile not found.")
     if mentor["role"] != "mentor" or mentor["approval_status"] != "approved" or not mentor["is_visible"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Mentor is not currently available.")
+
+    active_result = (
+        supabase.table("matches")
+        .select("id,mentor_id,status")
+        .eq("mentee_id", current_user.id)
+        .eq("status", "active")
+        .limit(1)
+        .execute()
+    )
+    if active_result.data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You already have an active volunteer match.",
+        )
 
     existing_result = (
         supabase.table("matches")
@@ -287,7 +253,6 @@ def create_match_request(payload: MatchRequestPayload, current_user: AuthUser = 
                     {
                         "status": "pending",
                         "care_type": payload.care_type,
-                        "request_message": payload.message,
                     }
                 )
                 .eq("id", existing["id"])
@@ -300,10 +265,10 @@ def create_match_request(payload: MatchRequestPayload, current_user: AuthUser = 
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Database constraint mismatch: 'pending' status is not allowed by matches_status_check.",
                 ) from exc
-            if "request_message" in message or "care_type" in message:
+            if "care_type" in message:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Database schema mismatch: add 'care_type' and 'request_message' columns to matches table.",
+                    detail="Database schema mismatch: add the 'care_type' column to the matches table.",
                 ) from exc
             raise
         if not reopen_result.data:
@@ -322,7 +287,6 @@ def create_match_request(payload: MatchRequestPayload, current_user: AuthUser = 
                         "mentee_id": current_user.id,
                         "status": "pending",
                         "care_type": payload.care_type,
-                        "request_message": payload.message,
                     }
                 )
                 .execute()
@@ -334,10 +298,10 @@ def create_match_request(payload: MatchRequestPayload, current_user: AuthUser = 
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Database constraint mismatch: 'pending' status is not allowed by matches_status_check.",
                 ) from exc
-            if "request_message" in message or "care_type" in message:
+            if "care_type" in message:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Database schema mismatch: add 'care_type' and 'request_message' columns to matches table.",
+                    detail="Database schema mismatch: add the 'care_type' column to the matches table.",
                 ) from exc
             raise
 
@@ -357,31 +321,30 @@ def create_match_request(payload: MatchRequestPayload, current_user: AuthUser = 
         if normalized_result.data:
             match = normalized_result.data[0]
 
-    mentor_email = _get_auth_email(payload.mentor_id)
-    mentee_email = _get_auth_email(current_user.id) or current_user.email
+    mentor_email = get_auth_email(supabase, payload.mentor_id)
+    mentee_email = current_user.email or get_auth_email(supabase, current_user.id)
 
-    subject = f"New mentor request created (#{match_id})"
+    subject = f"New volunteer match request (#{match_id})"
     html = (
-        f"<p>A new mentee request is pending mentor approval.</p>"
+        f"<p>A new caregiver request is pending volunteer review.</p>"
         f"<p><strong>Match ID:</strong> {match_id}</p>"
-        f"<p><strong>Mentor:</strong> {mentor.get('full_name', 'Mentor')}</p>"
-        f"<p><strong>Mentee:</strong> {mentee.get('full_name', 'Mentee')}</p>"
+        f"<p><strong>Volunteer:</strong> {mentor.get('full_name', 'Volunteer')}</p>"
+        f"<p><strong>Caregiver:</strong> {mentee.get('full_name', 'Caregiver')}</p>"
         f"<p><strong>Care type:</strong> {payload.care_type}</p>"
-        f"<p><strong>Message:</strong> {payload.message}</p>"
     )
 
-    if settings.admin_email:
-        send_email(settings.admin_email, subject, html)
-    if mentor_email:
-        send_email(mentor_email, subject, html)
-    if mentee_email:
-        send_email(mentee_email, subject, html)
+    _queue_emails(
+        background_tasks,
+        [settings.admin_email, mentor_email, mentee_email],
+        subject,
+        html,
+    )
 
     return {
         "message": (
-            "Previous request reopened and sent for mentor review."
+            "Previous request reopened and sent for volunteer review."
             if is_resubmission
-            else "Match request submitted and pending mentor approval."
+            else "Match request submitted and pending volunteer approval."
         ),
         "match": match,
         "care_type": payload.care_type,
@@ -404,11 +367,12 @@ def accept_match_request(match_id: int, _: AuthUser = Depends(require_admin_role
 def mentor_decision(
     match_id: int,
     payload: MentorDecisionPayload,
+    background_tasks: BackgroundTasks,
     current_user: AuthUser = Depends(require_auth),
 ) -> dict[str, Any]:
     supabase = get_supabase_client()
 
-    requester = _get_profile(current_user.id)
+    requester = get_profile(supabase, current_user.id)
     if not requester:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
     if requester["role"] != "mentor" or requester["approval_status"] != "approved":
@@ -433,13 +397,28 @@ def mentor_decision(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only manage requests assigned to you.",
         )
-    if match["status"] == "cancelled":
+    if match["status"] != "pending":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This request is already cancelled and cannot be updated.",
+            detail="Only pending requests can be accepted or declined.",
         )
 
-    next_status = "active" if payload.decision == "accept" else "cancelled"
+    if payload.decision == "accept":
+        other_active = (
+            supabase.table("matches")
+            .select("id,mentor_id,status")
+            .eq("mentee_id", match["mentee_id"])
+            .eq("status", "active")
+            .limit(1)
+            .execute()
+        )
+        if any(row.get("id") != match_id for row in (other_active.data or [])):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This caregiver already has an active volunteer match.",
+            )
+
+    next_status = "active" if payload.decision == "accept" else "declined"
     updated_result = (
         supabase.table("matches")
         .update({"status": next_status})
@@ -447,32 +426,27 @@ def mentor_decision(
         .execute()
     )
 
-    mentee_profile = _get_profile(match["mentee_id"]) or {}
-    mentor_profile = _get_profile(current_user.id) or {}
-    mentee_email = _get_auth_email(match["mentee_id"])
+    mentee_profile = get_profile(supabase, match["mentee_id"]) or {}
+    mentor_profile = requester
+    mentee_email = get_auth_email(supabase, match["mentee_id"])
 
-    message_block = (
-        f"<p><strong>Mentor message:</strong> {payload.message}</p>"
-        if payload.message and payload.message.strip()
-        else "<p><strong>Mentor message:</strong> (none provided)</p>"
-    )
     decision_text = "accepted" if payload.decision == "accept" else "rejected"
-    mentor_name = mentor_profile.get("full_name") or "Your mentor"
+    mentor_name = mentor_profile.get("full_name") or "Your volunteer"
     subject = f"{mentor_name} {decision_text} your request (#{match_id})"
     html = (
         f"<p>Your request has been <strong>{decision_text}</strong>.</p>"
-        f"<p><strong>Mentor:</strong> {mentor_profile.get('full_name', 'Mentor')}</p>"
-        f"<p><strong>Mentor contact:</strong> {current_user.email or 'Not available'}</p>"
-        f"<p><strong>Mentee:</strong> {mentee_profile.get('full_name', 'Mentee')}</p>"
-        f"{message_block}"
+        f"<p><strong>Volunteer:</strong> {mentor_profile.get('full_name', 'Volunteer')}</p>"
+        f"<p><strong>Volunteer contact:</strong> {current_user.email or 'Not available'}</p>"
+        f"<p><strong>Caregiver:</strong> {mentee_profile.get('full_name', 'Caregiver')}</p>"
     )
 
-    if settings.admin_email:
-        send_email(settings.admin_email, subject, html, reply_to=current_user.email)
-    if mentee_email:
-        send_email(mentee_email, subject, html, reply_to=current_user.email)
-    if current_user.email:
-        send_email(current_user.email, subject, html, reply_to=current_user.email)
+    _queue_emails(
+        background_tasks,
+        [settings.admin_email, mentee_email, current_user.email],
+        subject,
+        html,
+        reply_to=current_user.email,
+    )
 
     return {
         "message": f"Request {decision_text}.",

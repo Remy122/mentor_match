@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.auth import AuthUser, require_admin_role
+from app.core.profiles import get_profiles_by_ids
 from app.core.supabase import get_supabase_client
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -14,7 +15,7 @@ def get_pending_users(_: AuthUser = Depends(require_admin_role)) -> dict[str, li
     result = (
         supabase.table("profiles")
         .select(
-            "id,role,full_name,bio,profile_picture_url,approval_status,is_visible,created_at,"
+            "id,role,username,full_name,bio,profile_picture_url,approval_status,is_visible,created_at,"
             "mentor_profiles(skills,availability,total_hours),"
             "mentee_profiles(goals,interests)"
         )
@@ -32,7 +33,7 @@ def get_reviewed_users(_: AuthUser = Depends(require_admin_role)) -> dict[str, l
     result = (
         supabase.table("profiles")
         .select(
-            "id,role,full_name,bio,profile_picture_url,approval_status,is_visible,created_at,"
+            "id,role,username,full_name,bio,profile_picture_url,approval_status,is_visible,created_at,"
             "mentor_profiles(skills,availability,total_hours),"
             "mentee_profiles(goals,interests)"
         )
@@ -145,12 +146,44 @@ def get_dashboard(_: AuthUser = Depends(require_admin_role)) -> dict[str, float]
     }
 
 
+@router.get("/matches")
+def get_admin_matches(_: AuthUser = Depends(require_admin_role)) -> dict[str, Any]:
+    supabase = get_supabase_client()
+    result = (
+        supabase.table("matches")
+        .select("id,mentor_id,mentee_id,status,care_type,created_at")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    matches = result.data or []
+    profile_ids = list({row_id for match in matches for row_id in (match.get("mentor_id"), match.get("mentee_id")) if row_id})
+    profiles = get_profiles_by_ids(
+        supabase,
+        profile_ids,
+        "id,username,full_name,profile_picture_url",
+    )
+
+    status_counts: dict[str, int] = {}
+    enriched = []
+    for match in matches:
+        match_status = match.get("status") or "unknown"
+        status_counts[match_status] = status_counts.get(match_status, 0) + 1
+        enriched.append(
+            {
+                **match,
+                "volunteer_profile": profiles.get(match.get("mentor_id")),
+                "caregiver_profile": profiles.get(match.get("mentee_id")),
+            }
+        )
+    return {"matches": enriched, "status_counts": status_counts}
+
+
 @router.get("/mentors")
 def get_admin_mentors(_: AuthUser = Depends(require_admin_role)) -> dict[str, list[dict[str, Any]]]:
     supabase = get_supabase_client()
     result = (
         supabase.table("profiles")
-        .select("id,full_name,bio,profile_picture_url,is_visible,approval_status,mentor_profiles(skills,availability,total_hours)")
+        .select("id,username,full_name,bio,profile_picture_url,is_visible,approval_status,mentor_profiles(skills,availability,total_hours)")
         .eq("role", "mentor")
         .eq("approval_status", "approved")
         .order("created_at", desc=False)

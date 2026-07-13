@@ -1,70 +1,18 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
+import Pill from "../components/Pill";
+import {
+  apiFetch,
+  BACKEND_BASE_URL,
+  buildMentorAvailability,
+  normalizeMentor,
+  parseCommaSeparated,
+  parseMentorAvailability,
+  profilePayloadFromMetadata,
+} from "../lib/portalUtils";
 import { supabase, hasSupabaseEnv } from "../lib/supabaseClient";
-
-const BACKEND_BASE_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-
-function parseMentorAvailability(rawAvailability) {
-  const normalized = (rawAvailability ?? "").trim();
-  if (!normalized) {
-    return { mentorMode: "Remote", availability: "" };
-  }
-
-  const [modeCandidate, ...rest] = normalized.split("::");
-  const mode = modeCandidate?.trim();
-  if (mode === "Remote" || mode === "In person") {
-    return {
-      mentorMode: mode,
-      availability: rest.join("::").trim(),
-    };
-  }
-
-  return {
-    mentorMode: "Remote",
-    availability: normalized,
-  };
-}
-
-function buildMentorAvailability(availability, mentorMode) {
-  const cleanAvailability = (availability ?? "").trim();
-  const cleanMode = mentorMode === "In person" ? "In person" : "Remote";
-  return cleanAvailability ? `${cleanMode} :: ${cleanAvailability}` : cleanMode;
-}
-
-function normalizeMentor(mentor) {
-  const mentorProfile = Array.isArray(mentor.mentor_profiles)
-    ? mentor.mentor_profiles[0]
-    : mentor.mentor_profiles;
-  const availabilityInfo = parseMentorAvailability(mentorProfile?.availability);
-
-  return {
-    id: mentor.id,
-    name: mentor.full_name ?? "Unnamed mentor",
-    pronouns: "N/A",
-    city: availabilityInfo.mentorMode,
-    languages: [],
-    focus: mentorProfile?.skills ?? [],
-    availability: availabilityInfo.availability || "Not listed",
-    bio: mentor.bio ?? "No bio provided yet.",
-  };
-}
-
-function parseCommaSeparated(input) {
-  return input
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function Pill({ children }) {
-  return (
-    <span className="inline-flex items-center rounded-full bg-[#fde774] px-3 py-1 text-xs font-bold text-[#2c2455]">
-      {children}
-    </span>
-  );
-}
 
 export default function Home() {
   const [emailInput, setEmailInput] = useState("");
@@ -75,6 +23,7 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [authSuccess, setAuthSuccess] = useState("");
   const [signupRole, setSignupRole] = useState("mentee");
+  const [signupUsername, setSignupUsername] = useState("");
   const [signupFullName, setSignupFullName] = useState("");
   const [signupBio, setSignupBio] = useState("");
   const [signupProfilePictureUrl, setSignupProfilePictureUrl] = useState("");
@@ -90,7 +39,6 @@ export default function Home() {
   const [isMatchSent, setIsMatchSent] = useState(false);
   const [isSendingMatch, setIsSendingMatch] = useState(false);
   const [careType, setCareType] = useState("");
-  const [messageToVolunteer, setMessageToVolunteer] = useState("");
   const [requestError, setRequestError] = useState("");
   const [menteeRequests, setMenteeRequests] = useState([]);
   const [isLoadingMenteeRequests, setIsLoadingMenteeRequests] = useState(false);
@@ -105,6 +53,7 @@ export default function Home() {
   const [profileSaveMessage, setProfileSaveMessage] = useState("");
   const [profileForm, setProfileForm] = useState({
     role: "mentee",
+    username: "",
     fullName: "",
     bio: "",
     profilePictureUrl: "",
@@ -121,6 +70,8 @@ export default function Home() {
   const [adminReviewedUsers, setAdminReviewedUsers] = useState([]);
   const [adminMetrics, setAdminMetrics] = useState(null);
   const [adminMentors, setAdminMentors] = useState([]);
+  const [adminMatches, setAdminMatches] = useState([]);
+  const [adminMatchStatusFilter, setAdminMatchStatusFilter] = useState("all");
   const [adminSessionEntries, setAdminSessionEntries] = useState([]);
   const [adminSessionsTotal, setAdminSessionsTotal] = useState(0);
   const [adminSessionMentorFilter, setAdminSessionMentorFilter] =
@@ -130,8 +81,6 @@ export default function Home() {
   const [adminSuccess, setAdminSuccess] = useState("");
   const [adminActionUserId, setAdminActionUserId] = useState("");
   const [adminViewMode, setAdminViewMode] = useState("admin");
-  const [adminSelectedPendingUser, setAdminSelectedPendingUser] =
-    useState(null);
   const [adminSelectedReviewedUser, setAdminSelectedReviewedUser] =
     useState(null);
   const [adminSelectedMentor, setAdminSelectedMentor] = useState(null);
@@ -144,17 +93,16 @@ export default function Home() {
   const [mentorRequests, setMentorRequests] = useState([]);
   const [isLoadingMentorRequests, setIsLoadingMentorRequests] = useState(false);
   const [mentorRequestsError, setMentorRequestsError] = useState("");
-  const [expandedMentorRequestId, setExpandedMentorRequestId] = useState(null);
   const [mentorDecisionLoadingId, setMentorDecisionLoadingId] = useState(null);
   const [mentorDecisionError, setMentorDecisionError] = useState("");
   const [mentorDecisionSuccess, setMentorDecisionSuccess] = useState("");
-  const [mentorDecisionMessages, setMentorDecisionMessages] = useState({});
   const [mentorHoursForm, setMentorHoursForm] = useState({
     matchId: "",
     meetingDate: "",
     hours: "",
     nextMeeting: "",
     topicsDiscussed: "",
+    anythingToFlag: "",
   });
   const [isMentorHoursLoading, setIsMentorHoursLoading] = useState(false);
   const [isMentorHoursSaving, setIsMentorHoursSaving] = useState(false);
@@ -238,7 +186,7 @@ export default function Home() {
       [
         ...new Set(
           adminSessionEntries.map(
-            (entry) => entry.mentor_profile?.full_name || "Unknown mentor",
+            (entry) => entry.mentor_profile?.full_name || "Unknown volunteer",
           ),
         ),
       ].sort(),
@@ -250,10 +198,16 @@ export default function Home() {
     }
     return adminSessionEntries.filter(
       (entry) =>
-        (entry.mentor_profile?.full_name || "Unknown mentor") ===
+        (entry.mentor_profile?.full_name || "Unknown volunteer") ===
         adminSessionMentorFilter,
     );
   }, [adminSessionMentorFilter, adminSessionEntries]);
+  const filteredAdminMatches = useMemo(() => {
+    if (adminMatchStatusFilter === "all") return adminMatches;
+    return adminMatches.filter(
+      (match) => match.status === adminMatchStatusFilter,
+    );
+  }, [adminMatchStatusFilter, adminMatches]);
   const userInitial = useMemo(
     () =>
       (
@@ -285,13 +239,27 @@ export default function Home() {
     if (!hasSupabaseEnv || !supabase) return;
 
     async function hydrateAuthFromSession() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      try {
+        const {
+          data: { session },
+          error,
+        } = await supabase.auth.getSession();
 
-      if (session?.access_token) {
-        window.localStorage.setItem("ocgoAccessToken", session.access_token);
-        setIsUnlocked(true);
+        if (error) {
+          await supabase.auth.signOut({ scope: "local" });
+          window.localStorage.removeItem("ocgoAccessToken");
+          setIsUnlocked(false);
+          return;
+        }
+
+        if (session?.access_token) {
+          window.localStorage.setItem("ocgoAccessToken", session.access_token);
+          setIsUnlocked(true);
+        }
+      } catch {
+        await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+        window.localStorage.removeItem("ocgoAccessToken");
+        setIsUnlocked(false);
       }
     }
 
@@ -324,14 +292,14 @@ export default function Home() {
       setProfileSaveMessage("");
 
       try {
-        let response = await fetch(`${BACKEND_BASE_URL}/api/auth/me`, {
+        let response = await apiFetch(`${BACKEND_BASE_URL}/api/auth/me`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
         });
 
         if (response.status === 404) {
-          await fetch(`${BACKEND_BASE_URL}/api/auth/sync-profile`, {
+          await apiFetch(`${BACKEND_BASE_URL}/api/auth/sync-profile`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -340,7 +308,7 @@ export default function Home() {
             body: JSON.stringify({}),
           });
 
-          response = await fetch(`${BACKEND_BASE_URL}/api/auth/me`, {
+          response = await apiFetch(`${BACKEND_BASE_URL}/api/auth/me`, {
             headers: {
               Authorization: `Bearer ${token}`,
             },
@@ -351,7 +319,39 @@ export default function Home() {
           throw new Error(`Failed to load profile (${response.status})`);
         }
 
-        const data = await response.json();
+        let data = await response.json();
+        const profileRole = data.profile?.role;
+        const isRoleProfileMissing =
+          (profileRole === "mentor" && !data.mentor_profile) ||
+          (profileRole === "mentee" && !data.mentee_profile);
+
+        if (isRoleProfileMissing) {
+          const {
+            data: { user },
+          } = await supabase.auth.getUser();
+          const metadataPayload = profilePayloadFromMetadata(
+            user?.user_metadata,
+          );
+
+          if (metadataPayload?.role === profileRole) {
+            const syncResponse = await apiFetch(
+              `${BACKEND_BASE_URL}/api/auth/sync-profile`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify(metadataPayload),
+              },
+            );
+
+            if (syncResponse.ok) {
+              data = await syncResponse.json();
+            }
+          }
+        }
+
         const profile = data.profile ?? {};
         const mentorProfile = data.mentor_profile ?? {};
         const menteeProfile = data.mentee_profile ?? {};
@@ -362,6 +362,7 @@ export default function Home() {
         setProfileData(data);
         setProfileForm({
           role: profile.role ?? "mentee",
+          username: profile.username ?? "",
           fullName: profile.full_name ?? "",
           bio: profile.bio ?? "",
           profilePictureUrl: profile.profile_picture_url ?? "",
@@ -400,7 +401,7 @@ export default function Home() {
       if (!token) {
         setVolunteers([]);
         setVolunteerLoadError(
-          "No backend token found. Set localStorage key `ocgoAccessToken` to load real mentors.",
+          "Your session has expired. Sign in again to load volunteers.",
         );
         return;
       }
@@ -409,7 +410,7 @@ export default function Home() {
       setVolunteerLoadError("");
 
       try {
-        const response = await fetch(
+        const response = await apiFetch(
           `${BACKEND_BASE_URL}/api/matches/mentors/available`,
           {
             headers: {
@@ -448,7 +449,7 @@ export default function Home() {
         setVolunteerLoadError(
           error instanceof Error
             ? error.message
-            : "Could not load mentors from backend.",
+            : "Could not load volunteers from backend.",
         );
       } finally {
         setIsLoadingVolunteers(false);
@@ -467,6 +468,7 @@ export default function Home() {
 
     const role = profileData?.profile?.role ?? profileForm.role;
     const payload = {
+      username: profileForm.username.trim(),
       full_name: profileForm.fullName.trim(),
       bio: profileForm.bio.trim(),
       profile_picture_url: profileForm.profilePictureUrl.trim(),
@@ -479,6 +481,9 @@ export default function Home() {
       goals: profileForm.goals.trim(),
       interests: parseCommaSeparated(profileForm.interests),
     };
+    if (!payload.username) {
+      delete payload.username;
+    }
 
     if (role !== "mentor") {
       delete payload.skills;
@@ -495,7 +500,7 @@ export default function Home() {
     setProfileSaveMessage("");
 
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/api/auth/me`, {
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/auth/me`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -529,6 +534,7 @@ export default function Home() {
       setProfileData(updated);
       setProfileForm({
         role: updatedProfile.role ?? "mentee",
+        username: updatedProfile.username ?? "",
         fullName: updatedProfile.full_name ?? "",
         bio: updatedProfile.bio ?? "",
         profilePictureUrl: updatedProfile.profile_picture_url ?? "",
@@ -563,29 +569,35 @@ export default function Home() {
         metricsResponse,
         mentorsResponse,
         sessionsResponse,
+        matchesResponse,
       ] =
         await Promise.all([
-          fetch(`${BACKEND_BASE_URL}/api/admin/pending-users`, {
+          apiFetch(`${BACKEND_BASE_URL}/api/admin/pending-users`, {
             headers: {
               Authorization: `Bearer ${token}`,
             },
           }),
-          fetch(`${BACKEND_BASE_URL}/api/admin/reviewed-users`, {
+          apiFetch(`${BACKEND_BASE_URL}/api/admin/reviewed-users`, {
             headers: {
               Authorization: `Bearer ${token}`,
             },
           }),
-          fetch(`${BACKEND_BASE_URL}/api/admin/dashboard`, {
+          apiFetch(`${BACKEND_BASE_URL}/api/admin/dashboard`, {
             headers: {
               Authorization: `Bearer ${token}`,
             },
           }),
-          fetch(`${BACKEND_BASE_URL}/api/admin/mentors`, {
+          apiFetch(`${BACKEND_BASE_URL}/api/admin/mentors`, {
             headers: {
               Authorization: `Bearer ${token}`,
             },
           }),
-          fetch(`${BACKEND_BASE_URL}/api/volunteer-hours`, {
+          apiFetch(`${BACKEND_BASE_URL}/api/volunteer-hours`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }),
+          apiFetch(`${BACKEND_BASE_URL}/api/admin/matches`, {
             headers: {
               Authorization: `Bearer ${token}`,
             },
@@ -615,12 +627,16 @@ export default function Home() {
           `Failed to load volunteer sessions (${sessionsResponse.status})`,
         );
       }
+      if (!matchesResponse.ok) {
+        throw new Error(`Failed to load matches (${matchesResponse.status})`);
+      }
 
       const pendingData = await pendingResponse.json();
       const reviewedData = await reviewedResponse.json();
       const metricsData = await metricsResponse.json();
       const mentorsData = await mentorsResponse.json();
       const sessionsData = await sessionsResponse.json();
+      const matchesData = await matchesResponse.json();
 
       setAdminPendingUsers(pendingData.pending_users ?? []);
       setAdminReviewedUsers(reviewedData.reviewed_users ?? []);
@@ -628,14 +644,7 @@ export default function Home() {
       setAdminMentors(mentorsData.mentors ?? []);
       setAdminSessionEntries(sessionsData.entries ?? []);
       setAdminSessionsTotal(sessionsData.total_hours ?? 0);
-      setAdminSelectedPendingUser((current) => {
-        if (!current) return null;
-        return (
-          (pendingData.pending_users ?? []).find(
-            (user) => user.id === current.id,
-          ) ?? null
-        );
-      });
+      setAdminMatches(matchesData.matches ?? []);
       setAdminSelectedReviewedUser((current) => {
         if (!current) return null;
         return (
@@ -671,7 +680,7 @@ export default function Home() {
     setAdminMentorDetailsError("");
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${BACKEND_BASE_URL}/api/matches/mentor-requests/${mentorId}`,
         {
           headers: {
@@ -706,13 +715,14 @@ export default function Home() {
       setAdminReviewedUsers([]);
       setAdminMetrics(null);
       setAdminMentors([]);
+      setAdminMatches([]);
+      setAdminMatchStatusFilter("all");
       setAdminSessionEntries([]);
       setAdminSessionsTotal(0);
       setAdminSessionMentorFilter("all");
       setAdminError("");
       setAdminSuccess("");
       setAdminActionUserId("");
-      setAdminSelectedPendingUser(null);
       setAdminSelectedReviewedUser(null);
       setAdminSelectedMentor(null);
       setAdminSelectedMentorRequests([]);
@@ -739,7 +749,7 @@ export default function Home() {
     setMenteeRequestsError("");
 
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/api/matches/my-requests`, {
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/matches/my-requests`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -780,7 +790,7 @@ export default function Home() {
     setMentorRequestsError("");
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${BACKEND_BASE_URL}/api/matches/mentor-requests`,
         {
           headers: {
@@ -813,7 +823,7 @@ export default function Home() {
           ? error.message === "Failed to fetch"
             ? "Temporary backend connection issue. Please refresh."
             : error.message
-          : "Could not load mentee requests.",
+          : "Could not load caregiver requests.",
       );
     } finally {
       setIsLoadingMentorRequests(false);
@@ -828,7 +838,7 @@ export default function Home() {
     setMentorHoursError("");
 
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/api/volunteer-hours`, {
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/volunteer-hours`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -866,7 +876,7 @@ export default function Home() {
     setMentorDecisionSuccess("");
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${BACKEND_BASE_URL}/api/matches/${matchId}/mentor-decision`,
         {
           method: "POST",
@@ -876,7 +886,6 @@ export default function Home() {
           },
           body: JSON.stringify({
             decision,
-            message: mentorDecisionMessages[matchId]?.trim() || null,
           }),
         },
       );
@@ -887,13 +896,9 @@ export default function Home() {
 
       setMentorDecisionSuccess(
         decision === "accept"
-          ? "Mentee request accepted and message sent."
-          : "Mentee request declined and message sent.",
+          ? "Caregiver request accepted."
+          : "Caregiver request declined.",
       );
-      setMentorDecisionMessages((current) => ({
-        ...current,
-        [matchId]: "",
-      }));
       await loadMentorRequestsData();
     } catch (error) {
       setMentorDecisionError(
@@ -921,7 +926,7 @@ export default function Home() {
       !mentorHoursForm.topicsDiscussed.trim()
     ) {
       setMentorHoursError(
-        "Please choose a mentee match, date, hours, and topics discussed.",
+        "Please choose a caregiver match, date, hours, and topics discussed.",
       );
       return;
     }
@@ -931,7 +936,7 @@ export default function Home() {
     setMentorHoursSuccess("");
 
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/api/volunteer-hours`, {
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/volunteer-hours`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -943,6 +948,7 @@ export default function Home() {
           hours: Number(mentorHoursForm.hours),
           next_meeting: mentorHoursForm.nextMeeting || null,
           topics_discussed: mentorHoursForm.topicsDiscussed.trim(),
+          anything_to_flag: mentorHoursForm.anythingToFlag.trim() || null,
         }),
       });
 
@@ -957,6 +963,7 @@ export default function Home() {
         hours: "",
         nextMeeting: "",
         topicsDiscussed: "",
+        anythingToFlag: "",
       }));
       await loadMentorHoursData();
     } catch (error) {
@@ -976,17 +983,16 @@ export default function Home() {
       setMentorRequests([]);
       setMentorRequestsError("");
       setIsLoadingMentorRequests(false);
-      setExpandedMentorRequestId(null);
       setMentorDecisionLoadingId(null);
       setMentorDecisionError("");
       setMentorDecisionSuccess("");
-      setMentorDecisionMessages({});
       setMentorHoursForm({
         matchId: "",
         meetingDate: "",
         hours: "",
         nextMeeting: "",
         topicsDiscussed: "",
+        anythingToFlag: "",
       });
       setIsMentorHoursLoading(false);
       setIsMentorHoursSaving(false);
@@ -1022,7 +1028,7 @@ export default function Home() {
     setAdminSuccess("");
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${BACKEND_BASE_URL}/api/admin/users/${userId}/${action}`,
         {
           method: "POST",
@@ -1066,7 +1072,7 @@ export default function Home() {
     setAdminMentorDetailsError("");
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${BACKEND_BASE_URL}/api/admin/mentors/${mentorId}/remove-access`,
         {
           method: "POST",
@@ -1080,7 +1086,7 @@ export default function Home() {
         throw new Error(`Failed to remove mentor access (${response.status})`);
       }
 
-      setAdminSuccess("Mentor listing and mentor access removed.");
+      setAdminSuccess("Volunteer listing and access removed.");
       setAdminSelectedMentor(null);
       setAdminSelectedMentorRequests([]);
       await loadAdminDashboardData();
@@ -1108,6 +1114,10 @@ export default function Home() {
       setAuthError("Email and password are required.");
       return;
     }
+    if (authMode === "signup" && !signupUsername.trim()) {
+      setAuthError("Username is required.");
+      return;
+    }
 
     setIsAuthLoading(true);
     setAuthError("");
@@ -1116,6 +1126,7 @@ export default function Home() {
     async function syncSignupProfile(token) {
       const payload = {
         role: signupRole,
+        username: signupUsername.trim(),
         full_name:
           signupFullName.trim() ||
           emailInput.trim().split("@")[0] ||
@@ -1137,7 +1148,7 @@ export default function Home() {
         payload.interests = parseCommaSeparated(signupInterests);
       }
 
-      const response = await fetch(
+      const response = await apiFetch(
         `${BACKEND_BASE_URL}/api/auth/sync-profile`,
         {
           method: "POST",
@@ -1156,17 +1167,33 @@ export default function Home() {
 
     try {
       if (authMode === "signup") {
+        const signupMetadata = {
+          full_name:
+            signupFullName.trim() ||
+            emailInput.trim().split("@")[0] ||
+            "New User",
+          role: signupRole,
+          username: signupUsername.trim(),
+          bio: signupBio.trim() || null,
+          profile_picture_url: signupProfilePictureUrl.trim() || null,
+        };
+
+        if (signupRole === "mentor") {
+          signupMetadata.skills = parseCommaSeparated(signupSkills);
+          signupMetadata.availability = buildMentorAvailability(
+            signupAvailability,
+            signupMentorMode,
+          );
+        } else {
+          signupMetadata.goals = signupGoals.trim() || null;
+          signupMetadata.interests = parseCommaSeparated(signupInterests);
+        }
+
         const { data, error } = await supabase.auth.signUp({
           email: emailInput.trim(),
           password: passwordInput,
           options: {
-            data: {
-              full_name:
-                signupFullName.trim() ||
-                emailInput.trim().split("@")[0] ||
-                "New User",
-              role: signupRole,
-            },
+            data: signupMetadata,
           },
         });
         if (error) throw error;
@@ -1209,8 +1236,8 @@ export default function Home() {
 
   async function handleSendMatch() {
     if (!selectedVolunteerId) return;
-    if (!careType || !messageToVolunteer.trim()) {
-      setRequestError("Please add your care type and a short message first.");
+    if (!careType) {
+      setRequestError("Please select the type of support you need.");
       return;
     }
     const token = window.localStorage.getItem("ocgoAccessToken");
@@ -1223,7 +1250,7 @@ export default function Home() {
     setRequestError("");
 
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/api/matches/requests`, {
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/matches/requests`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1232,7 +1259,6 @@ export default function Home() {
         body: JSON.stringify({
           mentor_id: selectedVolunteerId,
           care_type: careType,
-          message: messageToVolunteer.trim(),
         }),
       });
 
@@ -1271,7 +1297,6 @@ export default function Home() {
     setSelectedVolunteerId(shouldDeselect ? "" : volunteerId);
     setRequestError("");
     setCareType("");
-    setMessageToVolunteer("");
   }
 
   function handleStartOver() {
@@ -1286,6 +1311,7 @@ export default function Home() {
     setAuthError("");
     setAuthSuccess("");
     setSignupRole("mentee");
+    setSignupUsername("");
     setSignupFullName("");
     setSignupBio("");
     setSignupProfilePictureUrl("");
@@ -1298,7 +1324,6 @@ export default function Home() {
     setIsMatchSent(false);
     setIsSendingMatch(false);
     setCareType("");
-    setMessageToVolunteer("");
     setRequestError("");
     setMenteeRequests([]);
     setIsLoadingMenteeRequests(false);
@@ -1317,6 +1342,8 @@ export default function Home() {
     setAdminReviewedUsers([]);
     setAdminMetrics(null);
     setAdminMentors([]);
+    setAdminMatches([]);
+    setAdminMatchStatusFilter("all");
     setAdminSessionEntries([]);
     setAdminSessionsTotal(0);
     setAdminSessionMentorFilter("all");
@@ -1324,7 +1351,6 @@ export default function Home() {
     setAdminError("");
     setAdminSuccess("");
     setAdminActionUserId("");
-    setAdminSelectedPendingUser(null);
     setAdminSelectedReviewedUser(null);
     setAdminSelectedMentor(null);
     setAdminSelectedMentorRequests([]);
@@ -1335,17 +1361,16 @@ export default function Home() {
     setMentorRequests([]);
     setIsLoadingMentorRequests(false);
     setMentorRequestsError("");
-    setExpandedMentorRequestId(null);
     setMentorDecisionLoadingId(null);
     setMentorDecisionError("");
     setMentorDecisionSuccess("");
-    setMentorDecisionMessages({});
     setMentorHoursForm({
       matchId: "",
       meetingDate: "",
       hours: "",
       nextMeeting: "",
       topicsDiscussed: "",
+      anythingToFlag: "",
     });
     setIsMentorHoursLoading(false);
     setIsMentorHoursSaving(false);
@@ -1355,6 +1380,7 @@ export default function Home() {
     setMentorHoursTotal(0);
     setProfileForm({
       role: "mentee",
+      username: "",
       fullName: "",
       bio: "",
       profilePictureUrl: "",
@@ -1372,7 +1398,6 @@ export default function Home() {
     setIsMatchSent(false);
     setIsSendingMatch(false);
     setCareType("");
-    setMessageToVolunteer("");
     setRequestError("");
   }
 
@@ -1399,9 +1424,12 @@ export default function Home() {
                 aria-label="Open profile menu"
               >
                 {profileForm.profilePictureUrl ? (
-                  <img
+                  <Image
                     src={profileForm.profilePictureUrl}
                     alt="Profile"
+                    width={44}
+                    height={44}
+                    unoptimized
                     className="h-full w-full object-cover"
                   />
                 ) : (
@@ -1439,6 +1467,7 @@ export default function Home() {
       </header>
 
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-8">
+        {!isUnlocked && (
         <section className="rounded-3xl bg-linear-to-r from-[#6d57b8] to-[#8169c9] p-8 text-white shadow-sm">
           <p className="mb-2 text-sm font-bold uppercase tracking-[0.2em] text-[#efeaff]">
             Welcome
@@ -1449,33 +1478,8 @@ export default function Home() {
           <p className="max-w-3xl text-[#efeaff]">
             match with a peer volunteer who understands caregiving.
           </p>
-          {isAdmin && (
-            <div className="mt-5 inline-flex rounded-full bg-white/15 p-1">
-              <button
-                type="button"
-                onClick={() => setAdminViewMode("admin")}
-                className={`rounded-full px-4 py-2 text-xs font-extrabold uppercase tracking-[0.08em] ${
-                  adminViewMode === "admin"
-                    ? "bg-white text-[#4a3c86]"
-                    : "text-white/90 hover:bg-white/20"
-                }`}
-              >
-                Admin view
-              </button>
-              <button
-                type="button"
-                onClick={() => setAdminViewMode("mentee")}
-                className={`rounded-full px-4 py-2 text-xs font-extrabold uppercase tracking-[0.08em] ${
-                  adminViewMode === "mentee"
-                    ? "bg-white text-[#4a3c86]"
-                    : "text-white/90 hover:bg-white/20"
-                }`}
-              >
-                Mentee view
-              </button>
-            </div>
-          )}
         </section>
+        )}
 
         {!isUnlocked && (
           <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
@@ -1537,9 +1541,28 @@ export default function Home() {
                     onChange={(event) => setSignupRole(event.target.value)}
                     className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
                   >
-                    <option value="mentee">Mentee</option>
-                    <option value="mentor">Mentor</option>
+                    <option value="mentee">Caregiver</option>
+                    <option value="mentor">Volunteer</option>
                   </select>
+
+                  <label
+                    htmlFor="signup-username"
+                    className="text-sm font-bold text-[#3f346c]"
+                  >
+                    Username
+                  </label>
+                  <input
+                    id="signup-username"
+                    type="text"
+                    value={signupUsername}
+                    onChange={(event) => setSignupUsername(event.target.value)}
+                    placeholder="letters_numbers_only"
+                    minLength={3}
+                    maxLength={30}
+                    pattern="[A-Za-z0-9_]+"
+                    required
+                    className="rounded-xl border border-[#d7d2ea] px-4 py-3 outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                  />
 
                   <label
                     htmlFor="signup-full-name"
@@ -1736,36 +1759,19 @@ export default function Home() {
                   Account pending
                 </p>
                 <h3 className="mt-2 text-2xl font-bold text-[#2c2455]">
-                  Your {userRole} profile is waiting for admin approval.
+                  Your {userRole === "mentor" ? "volunteer" : "caregiver"} profile is waiting for admin approval.
                 </h3>
                 <p className="mt-2 max-w-2xl text-sm text-[#5c5385]">
                   You can update your bio and profile picture from Settings,
-                  but mentor matching, requests, and volunteer-hour tools stay
+                  but matching, requests, and volunteer-hour tools stay
                   locked until an admin approves this account.
-                </p>
-                <p className="mt-4 inline-flex rounded-full bg-[#f0ecff] px-4 py-2 text-xs font-bold uppercase tracking-[0.08em] text-[#4a3c86]">
-                  Status: {approvalStatus || "pending"}
                 </p>
               </section>
             )}
 
             {!isProfileLoading && !profileError && isApprovedMentor && (
-              <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
-                <h3 className="text-2xl font-bold text-[#2c2455]">
-                  Mentor workspace
-                </h3>
-                <p className="mt-2 text-sm text-[#5c5385]">
-                  You are signed in as a mentor. Use your profile settings from
-                  the top-right avatar menu to update bio, visibility, and
-                  availability.
-                </p>
-                <p className="mt-2 text-sm text-[#5c5385]">
-                  Approval status:{" "}
-                  <span className="font-bold">
-                    {profileData?.profile?.approval_status ?? "unknown"}
-                  </span>
-                </p>
-                <div className="mt-4 inline-flex rounded-full bg-[#f0ecff] p-1">
+              <nav className="workspace-tabs" aria-label="Volunteer workspace">
+                <div className="inline-flex rounded-full bg-[#f0ecff] p-1">
                   <button
                     type="button"
                     onClick={() => setMentorViewMode("directory")}
@@ -1775,7 +1781,7 @@ export default function Home() {
                         : "text-[#4a3c86] hover:bg-white/60"
                     }`}
                   >
-                    All mentors
+                    All volunteers
                   </button>
                   <button
                     type="button"
@@ -1786,7 +1792,7 @@ export default function Home() {
                         : "text-[#4a3c86] hover:bg-white/60"
                     }`}
                   >
-                    Mentee requests
+                    Caregiver requests
                   </button>
                   <button
                     type="button"
@@ -1797,25 +1803,18 @@ export default function Home() {
                         : "text-[#4a3c86] hover:bg-white/60"
                     }`}
                   >
-                    My mentees
+                    My caregivers
                   </button>
                 </div>
-              </section>
+              </nav>
             )}
 
             {!isProfileLoading && !profileError && showMentorRequests && (
               <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-2xl font-bold text-[#2c2455]">
-                    Mentee requests
+                  <h3 className="workspace-heading text-2xl font-bold text-[#2c2455]">
+                    Caregiver requests
                   </h3>
-                  <button
-                    type="button"
-                    onClick={loadMentorRequestsData}
-                    className="rounded-full bg-[#f0ecff] px-4 py-2 text-xs font-bold text-[#4a3c86] hover:bg-[#e0d8fb]"
-                  >
-                    Refresh
-                  </button>
                 </div>
 
                 {isLoadingMentorRequests && (
@@ -1847,88 +1846,49 @@ export default function Home() {
                   {mentorRequests.map((request) => (
                     <article
                       key={request.id}
-                      className="hover-lift rounded-2xl border border-[#e5e0f4] bg-white p-4"
+                      className="request-record rounded-2xl border border-[#e5e0f4] bg-white"
                     >
-                      <div className="flex items-start justify-between gap-3">
+                      <header className="request-record-header flex flex-wrap items-start justify-between gap-4 border-b border-[#e5e0f4] px-6 py-5">
                         <div>
-                          <p className="text-base font-bold text-[#2c2455]">
-                            {request.mentee_profile?.full_name || "Unnamed mentee"}
+                          <p className="text-xl font-extrabold text-[#2c2455]">
+                            {request.mentee_profile?.full_name || "Unnamed caregiver"}
                           </p>
-                          <p className="text-sm text-[#5c5385]">
-                            Status: {request.status} - Sent{" "}
-                            {new Date(request.created_at).toLocaleDateString()}
+                          <p className="mt-1 text-sm text-[#5c5385]">
+                            Submitted {new Date(request.created_at).toLocaleString()}
                           </p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedMentorRequestId((current) =>
-                              current === request.id ? null : request.id,
-                            )
-                          }
-                          className="rounded-full bg-[#f0ecff] px-3 py-2 text-sm font-bold text-[#4a3c86] hover:bg-[#e0d8fb]"
-                          aria-label={
-                            expandedMentorRequestId === request.id
-                              ? "Hide request details"
-                              : "Show request details"
-                          }
-                        >
-                          {expandedMentorRequestId === request.id ? "Hide" : "Show"}
-                        </button>
-                      </div>
+                        <span className={`request-status request-status-${request.status}`}>
+                          {request.status}
+                        </span>
+                      </header>
 
-                      {expandedMentorRequestId === request.id && (
-                        <div className="mt-3 rounded-xl bg-[#f7f4ff] p-3 text-sm text-[#4f4578]">
-                          <p>
-                            <span className="font-bold">Mentee:</span>{" "}
-                            {request.mentee_profile?.full_name || "Unnamed mentee"}
-                          </p>
-                          <p>
-                            <span className="font-bold">Status:</span> {request.status}
-                          </p>
-                          <p>
-                            <span className="font-bold">Submitted:</span>{" "}
-                            {new Date(request.created_at).toLocaleString()}
-                          </p>
-                          <p>
-                            <span className="font-bold">Bio:</span>{" "}
-                            {request.mentee_profile?.bio || "No bio provided."}
-                          </p>
-                          <p>
-                            <span className="font-bold">Care type:</span>{" "}
+                      <div className="grid gap-0 md:grid-cols-[minmax(0,1.4fr)_minmax(240px,0.8fr)]">
+                        <div className="px-6 py-6 md:border-r md:border-[#e5e0f4]">
+                          <p className="request-label">Support requested</p>
+                          <p className="mt-2 text-lg font-bold leading-7 text-[#2c2455]">
                             {request.care_type || "Not specified"}
                           </p>
-                          <p>
-                            <span className="font-bold">Initial request:</span>{" "}
-                            {request.request_message || "No message provided."}
+
+                          <p className="request-label mt-7">About the caregiver</p>
+                          <p className="mt-2 max-w-3xl text-base leading-7 text-[#4f4578]">
+                            {request.mentee_profile?.bio || "No bio provided."}
                           </p>
-                          <p>
-                            <span className="font-bold">Email:</span>{" "}
+                        </div>
+
+                        <aside className="bg-[#faf8ff] px-6 py-6">
+                          <p className="request-label">Contact</p>
+                          <p className="mt-2 break-all text-base font-semibold text-[#2c2455]">
                             {request.mentee_email || "No email available"}
                           </p>
+                          <p className="mt-2 text-sm leading-6 text-[#5c5385]">
+                            Contact details are available after approval for arranging the first meeting.
+                          </p>
+                        </aside>
+                      </div>
 
-                          {request.status !== "cancelled" ? (
-                            <div className="mt-3 space-y-2">
-                              <label
-                                htmlFor={`mentor-message-${request.id}`}
-                                className="block text-xs font-bold uppercase tracking-[0.08em] text-[#5c5385]"
-                              >
-                                Message to mentee
-                              </label>
-                              <textarea
-                                id={`mentor-message-${request.id}`}
-                                value={mentorDecisionMessages[request.id] ?? ""}
-                                onChange={(event) =>
-                                  setMentorDecisionMessages((current) => ({
-                                    ...current,
-                                    [request.id]: event.target.value,
-                                  }))
-                                }
-                                placeholder="Share contact info, next steps, or meeting details."
-                                className="w-full rounded-xl border border-[#d7d2ea] px-3 py-2 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
-                                rows={3}
-                              />
-                              <div className="flex flex-wrap gap-2">
+                      <footer className="flex flex-wrap items-center gap-3 border-t border-[#e5e0f4] px-6 py-5">
+                        {request.status === "pending" ? (
+                          <>
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -1939,9 +1899,7 @@ export default function Home() {
                                 >
                                   {mentorDecisionLoadingId === request.id
                                     ? "Saving..."
-                                    : request.status === "active"
-                                      ? "Send message"
-                                      : "Accept request"}
+                                    : "Accept request"}
                                 </button>
                                 <button
                                   type="button"
@@ -1951,17 +1909,19 @@ export default function Home() {
                                   disabled={mentorDecisionLoadingId === request.id}
                                   className="rounded-full bg-[#fff2f2] px-4 py-2 text-xs font-bold uppercase tracking-[0.08em] text-[#9b2c2c] transition enabled:hover:bg-[#ffe3e3] disabled:cursor-not-allowed disabled:bg-slate-200"
                                 >
-                                  Reject request
+                                  Decline request
                                 </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.08em] text-[#5c5385]">
-                              This request is cancelled.
-                            </p>
-                          )}
-                        </div>
-                      )}
+                          </>
+                        ) : request.status === "active" ? (
+                          <p className="text-sm font-semibold text-green-700">
+                            This caregiver is an active match.
+                          </p>
+                        ) : (
+                          <p className="text-sm font-semibold text-[#5c5385]">
+                            This request is closed.
+                          </p>
+                        )}
+                      </footer>
                     </article>
                   ))}
                 </div>
@@ -1972,24 +1932,14 @@ export default function Home() {
             {!isProfileLoading && !profileError && showMentorMentees && (
               <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-2xl font-bold text-[#2c2455]">
-                    My mentees
+                  <h3 className="workspace-heading text-2xl font-bold text-[#2c2455]">
+                    My caregivers
                   </h3>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      loadMentorRequestsData();
-                      loadMentorHoursData();
-                    }}
-                    className="rounded-full bg-[#f0ecff] px-4 py-2 text-xs font-bold text-[#4a3c86] hover:bg-[#e0d8fb]"
-                  >
-                    Refresh
-                  </button>
                 </div>
 
                 <section className="mt-4 rounded-2xl border border-[#e5e0f4] bg-[#faf8ff] p-4">
                   <h4 className="text-base font-bold text-[#2c2455]">
-                    Active mentee connections
+                    Active caregiver connections
                   </h4>
                   <p className="mt-1 text-sm text-[#5c5385]">
                     After accepting a request, use this roster for contact and
@@ -1997,7 +1947,7 @@ export default function Home() {
                   </p>
                   {activeMenteeConnections.length === 0 ? (
                     <p className="mt-3 text-sm text-[#5c5385]">
-                      No active mentee connections yet.
+                      No active caregiver connections yet.
                     </p>
                   ) : (
                     <div className="mt-3 space-y-2">
@@ -2008,7 +1958,7 @@ export default function Home() {
                         >
                           <p className="font-bold text-[#2c2455]">
                             {request.mentee_profile?.full_name ||
-                              "Unnamed mentee"}
+                              "Unnamed caregiver"}
                           </p>
                           <p>
                             <span className="font-bold">Email:</span>{" "}
@@ -2055,7 +2005,7 @@ export default function Home() {
                         htmlFor="mentor-hours-match"
                         className="text-sm font-bold text-[#3f346c]"
                       >
-                        Active mentee
+                        Active caregiver
                       </label>
                       <select
                         id="mentor-hours-match"
@@ -2072,7 +2022,7 @@ export default function Home() {
                         {activeMenteeConnections.map((request) => (
                           <option key={`hours-${request.id}`} value={request.id}>
                             {(request.mentee_profile?.full_name ||
-                              "Unnamed mentee") + ` (Match ${request.id})`}
+                              "Unnamed caregiver") + ` (Match ${request.id})`}
                           </option>
                         ))}
                       </select>
@@ -2161,6 +2111,27 @@ export default function Home() {
                         className="resize-y rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
                       />
                     </div>
+                    <div className="md:col-span-2 flex flex-col gap-2">
+                      <label
+                        htmlFor="mentor-hours-flags"
+                        className="text-sm font-bold text-[#3f346c]"
+                      >
+                        Anything to flag
+                      </label>
+                      <textarea
+                        id="mentor-hours-flags"
+                        rows={2}
+                        value={mentorHoursForm.anythingToFlag}
+                        onChange={(event) =>
+                          setMentorHoursForm((current) => ({
+                            ...current,
+                            anythingToFlag: event.target.value,
+                          }))
+                        }
+                        placeholder="Optional concerns or follow-up items for the admin."
+                        className="resize-y rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                      />
+                    </div>
                     <div className="md:col-span-2">
                       <button
                         type="submit"
@@ -2197,6 +2168,12 @@ export default function Home() {
                             <span className="font-bold">Topics:</span>{" "}
                             {entry.topics_discussed}
                           </p>
+                          {entry.anything_to_flag && (
+                            <p className="mt-1 text-[#8f2525]">
+                              <span className="font-bold">Flag:</span>{" "}
+                              {entry.anything_to_flag}
+                            </p>
+                          )}
                           <p>
                             <span className="font-bold">Next meeting:</span>{" "}
                             {entry.next_meeting
@@ -2239,24 +2216,46 @@ export default function Home() {
                 </section>
               )}
 
+            {isAdmin && (
+              <nav className="workspace-tabs" aria-label="Admin workspace">
+                <div className="inline-flex rounded-full bg-[#f0ecff] p-1">
+                  <button
+                    type="button"
+                    onClick={() => setAdminViewMode("admin")}
+                    className={`rounded-full px-4 py-2 text-sm font-bold ${
+                      adminViewMode === "admin"
+                        ? "bg-white text-[#4a3c86] shadow-sm"
+                        : "text-[#4a3c86] hover:bg-white/60"
+                    }`}
+                  >
+                    Dashboard
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdminViewMode("mentee")}
+                    className={`rounded-full px-4 py-2 text-sm font-bold ${
+                      adminViewMode === "mentee"
+                        ? "bg-white text-[#4a3c86] shadow-sm"
+                        : "text-[#4a3c86] hover:bg-white/60"
+                    }`}
+                  >
+                    Caregiver experience
+                  </button>
+                </div>
+              </nav>
+            )}
+
             {showAdminDashboard && (
-              <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-2">
+              <section className="admin-dashboard rounded-3xl border border-[#ded6fb] bg-white p-8 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#e5e0f4] pb-7">
                   <div>
-                    <h3 className="text-2xl font-bold text-[#2c2455]">
+                    <h3 className="workspace-heading text-2xl font-bold text-[#2c2455]">
                       Admin dashboard
                     </h3>
                     <p className="mt-1 text-sm text-[#5c5385]">
-                      Review mentor and mentee approval requests directly.
+                      Review applications and monitor active support.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={loadAdminDashboardData}
-                    className="rounded-full bg-[#f0ecff] px-4 py-2 text-xs font-bold text-[#4a3c86] hover:bg-[#e0d8fb]"
-                  >
-                    Refresh
-                  </button>
                 </div>
 
                 {isAdminLoading && (
@@ -2276,60 +2275,137 @@ export default function Home() {
                 )}
 
                 {adminMetrics && (
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <article className="rounded-2xl bg-[#f7f4ff] p-4">
+                  <div className="admin-metrics mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <article className="rounded-2xl border border-[#e5e0f4] bg-[#f7f4ff] p-5">
                       <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
-                        Active mentors
+                        Active volunteers
                       </p>
-                      <p className="mt-1 text-2xl font-extrabold text-[#2c2455]">
+                      <p className="mt-3 text-4xl font-extrabold text-[#2c2455]">
                         {adminMetrics.active_mentors}
                       </p>
                     </article>
-                    <article className="rounded-2xl bg-[#f7f4ff] p-4">
+                    <article className="rounded-2xl border border-[#e5e0f4] bg-[#f7f4ff] p-5">
                       <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
-                        Active mentees
+                        Active caregivers
                       </p>
-                      <p className="mt-1 text-2xl font-extrabold text-[#2c2455]">
+                      <p className="mt-3 text-4xl font-extrabold text-[#2c2455]">
                         {adminMetrics.active_mentees}
                       </p>
                     </article>
-                    <article className="rounded-2xl bg-[#f7f4ff] p-4">
+                    <article className="rounded-2xl border border-[#e5e0f4] bg-[#f7f4ff] p-5">
                       <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
                         Current matches
                       </p>
-                      <p className="mt-1 text-2xl font-extrabold text-[#2c2455]">
+                      <p className="mt-3 text-4xl font-extrabold text-[#2c2455]">
                         {adminMetrics.current_matches}
                       </p>
                     </article>
-                    <article className="rounded-2xl bg-[#f7f4ff] p-4">
+                    <article className="rounded-2xl border border-[#e5e0f4] bg-[#f7f4ff] p-5">
                       <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
                         Volunteer hours
                       </p>
-                      <p className="mt-1 text-2xl font-extrabold text-[#2c2455]">
+                      <p className="mt-3 text-4xl font-extrabold text-[#2c2455]">
                         {adminMetrics.volunteer_hours_total}
                       </p>
                     </article>
                   </div>
                 )}
 
-                <section className="mt-6 rounded-2xl border border-[#e5e0f4] bg-[#faf8ff] p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h4 className="text-lg font-bold text-[#2c2455]">
-                      Mentor-Mentee session logs
+                <section className="admin-section mt-10 border-t border-[#e5e0f4] pt-9">
+                  <div className="flex flex-wrap items-end justify-between gap-4">
+                    <div>
+                      <h4 className="text-2xl font-extrabold text-[#2c2455]">
+                        All matches
+                      </h4>
+                      <p className="mt-2 text-base text-[#5c5385]">
+                        Every volunteer and caregiver match, including pending and closed requests.
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-3 text-sm font-bold text-[#3f346c]">
+                      Status
+                      <select
+                        value={adminMatchStatusFilter}
+                        onChange={(event) =>
+                          setAdminMatchStatusFilter(event.target.value)
+                        }
+                        className="rounded-xl border border-[#d7d2ea] bg-white px-3 py-2 text-sm outline-none ring-[#c9bff0] focus:border-[#7a63b7] focus:ring-2"
+                      >
+                        <option value="all">All statuses</option>
+                        <option value="pending">Pending</option>
+                        <option value="active">Active</option>
+                        <option value="declined">Declined</option>
+                        <option value="cancelled">Cancelled</option>
+                        <option value="completed">Completed</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  {filteredAdminMatches.length === 0 ? (
+                    <p className="mt-5 rounded-xl border border-dashed border-[#d7d2ea] p-4 text-sm text-[#5c5385]">
+                      No matches have this status.
+                    </p>
+                  ) : (
+                    <div className="mt-6 overflow-x-auto">
+                      <table className="w-full min-w-[720px] border-collapse text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-[#d7d2ea] text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
+                            <th className="px-3 py-3">Volunteer</th>
+                            <th className="px-3 py-3">Caregiver</th>
+                            <th className="px-3 py-3">Support requested</th>
+                            <th className="px-3 py-3">Status</th>
+                            <th className="px-3 py-3">Created</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredAdminMatches.map((match) => (
+                            <tr key={match.id} className="border-b border-[#eeeaf8] text-[#4f4578]">
+                              <td className="px-3 py-4 font-bold text-[#2c2455]">
+                                {match.volunteer_profile?.full_name || "Unknown volunteer"}
+                              </td>
+                              <td className="px-3 py-4 font-bold text-[#2c2455]">
+                                {match.caregiver_profile?.full_name || "Unknown caregiver"}
+                              </td>
+                              <td className="max-w-sm px-3 py-4">
+                                {match.care_type || "Not specified"}
+                              </td>
+                              <td className="px-3 py-4">
+                                <span className={`request-status request-status-${match.status}`}>
+                                  {match.status}
+                                </span>
+                              </td>
+                              <td className="px-3 py-4">
+                                {match.created_at
+                                  ? new Date(match.created_at).toLocaleDateString()
+                                  : "Unknown"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+
+                <section className="admin-section mt-10 border-t border-[#e5e0f4] pt-9">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                    <h4 className="text-2xl font-extrabold text-[#2c2455]">
+                      Volunteer-Caregiver session logs
                     </h4>
-                    <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
-                      Total logged hours: {adminSessionsTotal}
+                    <p className="mt-2 text-base text-[#5c5385]">
+                      Full session details across all volunteers and caregivers.
+                    </p>
+                    </div>
+                    <p className="rounded-full bg-[#f0ecff] px-4 py-2 text-sm font-bold text-[#4a3c86]">
+                      {adminSessionsTotal} total hours
                     </p>
                   </div>
-                  <p className="mt-1 text-sm text-[#5c5385]">
-                    Full session details across all mentors and mentees.
-                  </p>
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <div className="mt-5 flex flex-wrap items-center gap-3">
                     <label
                       htmlFor="admin-session-mentor-filter"
                       className="text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]"
                     >
-                      Filter by mentor
+                      Filter by volunteer
                     </label>
                     <select
                       id="admin-session-mentor-filter"
@@ -2339,7 +2415,7 @@ export default function Home() {
                       }
                       className="rounded-xl border border-[#d7d2ea] bg-white px-3 py-2 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
                     >
-                      <option value="all">All mentors</option>
+                      <option value="all">All volunteers</option>
                       {adminSessionMentorOptions.map((mentorName) => (
                         <option key={mentorName} value={mentorName}>
                           {mentorName}
@@ -2353,50 +2429,46 @@ export default function Home() {
                     </p>
                   ) : filteredAdminSessionEntries.length === 0 ? (
                     <p className="mt-3 text-sm text-[#5c5385]">
-                      No session logs match the selected mentor.
+                      No session logs match the selected volunteer.
                     </p>
                   ) : (
-                    <div className="mt-3 space-y-2">
+                    <div className="mt-6 divide-y divide-[#e5e0f4] border-y border-[#e5e0f4]">
                       {filteredAdminSessionEntries.slice(0, 20).map((entry) => (
                         <article
                           key={`admin-session-${entry.id}`}
-                          className="rounded-xl border border-[#e5e0f4] bg-white p-3 text-sm text-[#4f4578]"
+                          className="grid gap-5 py-5 text-sm text-[#4f4578] md:grid-cols-[150px_1fr_1fr]"
                         >
-                          <p className="font-bold text-[#2c2455]">
-                            {new Date(entry.meeting_date).toLocaleDateString()} -{" "}
-                            {entry.hours} hours
-                          </p>
-                          <p>
-                            <span className="font-bold">Mentor:</span>{" "}
-                            {entry.mentor_profile?.full_name || "Unknown mentor"}
-                          </p>
-                          <p>
-                            <span className="font-bold">Mentee:</span>{" "}
-                            {entry.mentee_profile?.full_name || "Unknown mentee"}
-                          </p>
-                          <p>
-                            <span className="font-bold">Match ID:</span>{" "}
-                            {entry.match_id}
-                          </p>
-                          <p>
-                            <span className="font-bold">Topics discussed:</span>{" "}
-                            {entry.topics_discussed || "Not provided"}
-                          </p>
-                          <p>
-                            <span className="font-bold">Next meeting:</span>{" "}
-                            {entry.next_meeting
-                              ? new Date(entry.next_meeting).toLocaleString()
-                              : "Not scheduled"}
-                          </p>
+                          <div>
+                            <p className="request-label">Session</p>
+                            <p className="mt-2 font-bold text-[#2c2455]">
+                              {new Date(entry.meeting_date).toLocaleDateString()}
+                            </p>
+                            <p className="mt-1 text-lg font-extrabold text-[#6d57b8]">{entry.hours} hours</p>
+                          </div>
+                          <div>
+                            <p className="request-label">Participants</p>
+                            <p className="mt-2"><span className="font-bold">Volunteer:</span> {entry.mentor_profile?.full_name || "Unknown volunteer"}</p>
+                            <p className="mt-1"><span className="font-bold">Caregiver:</span> {entry.mentee_profile?.full_name || "Unknown caregiver"}</p>
+                            <p className="mt-1 text-xs text-[#5c5385]">Match #{entry.match_id}</p>
+                          </div>
+                          <div>
+                            <p className="request-label">Session details</p>
+                            <p className="mt-2 leading-6">{entry.topics_discussed || "No topics provided"}</p>
+                            <p className={`mt-2 leading-6 ${entry.anything_to_flag ? "font-semibold text-[#8f2525]" : "text-[#5c5385]"}`}>
+                              <span className="font-bold">Anything to flag:</span>{" "}
+                              {entry.anything_to_flag || "Nothing flagged"}
+                            </p>
+                            <p className="mt-2"><span className="font-bold">Next meeting:</span> {entry.next_meeting ? new Date(entry.next_meeting).toLocaleString() : "Not scheduled"}</p>
+                          </div>
                         </article>
                       ))}
                     </div>
                   )}
                 </section>
 
-                <div className="mt-5 space-y-3">
-                  <h4 className="text-lg font-bold text-[#2c2455]">
-                    Pending mentor/mentee requests
+                <div className="admin-section mt-10 space-y-4 border-t border-[#e5e0f4] pt-9">
+                  <h4 className="text-2xl font-extrabold text-[#2c2455]">
+                    Pending applications
                   </h4>
                   {adminPendingUsers.length === 0 ? (
                     <article className="rounded-2xl border border-dashed border-[#d7d2ea] bg-white p-4">
@@ -2408,11 +2480,7 @@ export default function Home() {
                     adminPendingUsers.map((user) => (
                       <article
                         key={user.id}
-                        className={`hover-lift rounded-2xl border bg-white p-4 ${
-                          adminSelectedPendingUser?.id === user.id
-                            ? "border-[#7a63b7] ring-2 ring-[#d5cbf4]"
-                            : "border-[#e5e0f4]"
-                        }`}
+                        className="rounded-2xl border border-[#e5e0f4] bg-white p-6"
                       >
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
@@ -2420,7 +2488,7 @@ export default function Home() {
                               {user.full_name || "Unnamed user"}
                             </p>
                             <p className="text-sm text-[#5c5385]">
-                              {user.role} request - submitted{" "}
+                              {user.role === "mentor" ? "Volunteer" : "Caregiver"} application - submitted{" "}
                               {new Date(user.created_at).toLocaleDateString()}
                             </p>
                             {user.bio && (
@@ -2429,7 +2497,7 @@ export default function Home() {
                               </p>
                             )}
                           </div>
-                          <div className="flex gap-2">
+                          <div className="flex flex-wrap gap-2">
                             <button
                               type="button"
                               onClick={() =>
@@ -2450,49 +2518,22 @@ export default function Home() {
                             >
                               Reject
                             </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setAdminSelectedPendingUser((current) =>
-                                  current?.id === user.id ? null : user,
-                                )
-                              }
-                              className="rounded-full bg-[#f0ecff] px-3 py-2 text-sm font-bold text-[#4a3c86] hover:bg-[#e0d8fb]"
-                              aria-label={
-                                adminSelectedPendingUser?.id === user.id
-                                  ? "Hide profile details"
-                                  : "Show profile details"
-                              }
-                            >
-                              {adminSelectedPendingUser?.id === user.id
-                                ? "Hide"
-                                : "Show"}
-                            </button>
                           </div>
                         </div>
 
-                        {adminSelectedPendingUser?.id === user.id && (
-                          <div className="mt-4 rounded-xl bg-[#f7f4ff] p-3 text-sm text-[#4f4578]">
+                          <div className="mt-5 grid gap-4 border-t border-[#e5e0f4] pt-5 text-sm text-[#4f4578] md:grid-cols-2">
                             <p>
-                              <span className="font-bold">Name:</span>{" "}
-                              {user.full_name || "Unnamed user"}
+                              <span className="font-bold">Username:</span>{" "}
+                              {user.username || "Not provided"}
                             </p>
                             <p>
                               <span className="font-bold">Role:</span>{" "}
-                              {user.role}
-                            </p>
-                            <p>
-                              <span className="font-bold">Submitted:</span>{" "}
-                              {new Date(user.created_at).toLocaleString()}
-                            </p>
-                            <p>
-                              <span className="font-bold">Bio:</span>{" "}
-                              {user.bio || "No bio provided."}
+                              {user.role === "mentor" ? "Volunteer" : "Caregiver"}
                             </p>
 
                             {user.role === "mentor" && (
                               <>
-                                <p>
+                                <p className="md:col-span-2">
                                   <span className="font-bold">Skills:</span>{" "}
                                   {(
                                     (Array.isArray(user.mentor_profiles)
@@ -2532,15 +2573,14 @@ export default function Home() {
                               </>
                             )}
                           </div>
-                        )}
                       </article>
                     ))
                   )}
                 </div>
 
-                <div className="mt-6 space-y-3">
-                  <h4 className="text-lg font-bold text-[#2c2455]">
-                    Reviewed mentor/mentee requests
+                <div className="admin-section mt-10 space-y-4 border-t border-[#e5e0f4] pt-9">
+                  <h4 className="text-2xl font-extrabold text-[#2c2455]">
+                    Reviewed applications
                   </h4>
                   <p className="text-sm text-[#5c5385]">
                     View previously approved/rejected requests and update their
@@ -2568,7 +2608,7 @@ export default function Home() {
                               {user.full_name || "Unnamed user"}
                             </p>
                             <p className="text-sm text-[#5c5385]">
-                              {user.role} - {user.approval_status} - submitted{" "}
+                              {user.role === "mentor" ? "Volunteer" : "Caregiver"} - {user.approval_status} - submitted{" "}
                               {new Date(user.created_at).toLocaleDateString()}
                             </p>
                             {user.bio && (
@@ -2577,27 +2617,30 @@ export default function Home() {
                               </p>
                             )}
                           </div>
-                          <div className="flex gap-2">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleAdminRequestAction(user.id, "approve")
-                              }
-                              disabled={adminActionUserId === user.id}
-                              className="rounded-full bg-[#2c2455] px-4 py-2 text-sm font-bold text-white transition enabled:hover:bg-[#201943] disabled:cursor-not-allowed disabled:bg-slate-300"
-                            >
-                              Approve
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleAdminRequestAction(user.id, "reject")
-                              }
-                              disabled={adminActionUserId === user.id}
-                              className="rounded-full bg-[#fff2f2] px-4 py-2 text-sm font-bold text-[#9b2c2c] transition enabled:hover:bg-[#ffe3e3] disabled:cursor-not-allowed disabled:bg-slate-200"
-                            >
-                              Reject
-                            </button>
+                          <div className="flex flex-wrap gap-2">
+                            {user.approval_status === "approved" ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAdminRequestAction(user.id, "reject")
+                                }
+                                disabled={adminActionUserId === user.id}
+                                className="rounded-full bg-[#fff2f2] px-4 py-2 text-sm font-bold text-[#9b2c2c] transition enabled:hover:bg-[#ffe3e3] disabled:cursor-not-allowed disabled:bg-slate-200"
+                              >
+                                Revoke approval
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAdminRequestAction(user.id, "approve")
+                                }
+                                disabled={adminActionUserId === user.id}
+                                className="rounded-full bg-[#2c2455] px-4 py-2 text-sm font-bold text-white transition enabled:hover:bg-[#201943] disabled:cursor-not-allowed disabled:bg-slate-300"
+                              >
+                                Approve account
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() =>
@@ -2613,8 +2656,8 @@ export default function Home() {
                               }
                             >
                               {adminSelectedReviewedUser?.id === user.id
-                                ? "Hide"
-                                : "Show"}
+                                ? "Hide details"
+                                : "View details"}
                             </button>
                           </div>
                         </div>
@@ -2690,12 +2733,12 @@ export default function Home() {
                   )}
                 </div>
 
-                <div className="mt-6">
-                  <h4 className="text-lg font-bold text-[#2c2455]">
-                    Mentor profiles
+                <div className="admin-section mt-10 border-t border-[#e5e0f4] pt-9">
+                  <h4 className="text-2xl font-extrabold text-[#2c2455]">
+                    Volunteer profiles
                   </h4>
                   <p className="mt-1 text-sm text-[#5c5385]">
-                    Click a mentor card to view full profile and mentee
+                    Click a volunteer row to view their profile and caregiver
                     requests.
                   </p>
 
@@ -2704,7 +2747,7 @@ export default function Home() {
                       {adminMentors.length === 0 ? (
                         <article className="rounded-2xl border border-dashed border-[#d7d2ea] bg-white p-4">
                           <p className="text-sm text-[#5c5385]">
-                            No approved mentors found.
+                            No approved volunteers found.
                           </p>
                         </article>
                       ) : (
@@ -2720,7 +2763,7 @@ export default function Home() {
                             }`}
                           >
                             <p className="text-base font-bold text-[#2c2455]">
-                              {mentor.full_name || "Unnamed mentor"}
+                              {mentor.full_name || "Unnamed volunteer"}
                             </p>
                             <p className="mt-1 text-sm text-[#5c5385]">
                               Visibility:{" "}
@@ -2738,11 +2781,11 @@ export default function Home() {
 
                     <section className="rounded-2xl border border-[#e5e0f4] bg-white p-4">
                       <h5 className="text-base font-bold text-[#2c2455]">
-                        Mentor details
+                        Volunteer details
                       </h5>
                       {isLoadingAdminMentorDetails && (
                         <p className="mt-3 text-sm text-[#5c5385]">
-                          Loading mentor details...
+                          Loading volunteer details...
                         </p>
                       )}
                       {adminMentorDetailsError && (
@@ -2754,7 +2797,7 @@ export default function Home() {
                         !adminMentorDetailsError &&
                         !adminSelectedMentor && (
                           <p className="mt-3 text-sm text-[#5c5385]">
-                            Select a mentor to view profile and requests.
+                            Select a volunteer to view their profile and requests.
                           </p>
                         )}
 
@@ -2763,7 +2806,7 @@ export default function Home() {
                           <div>
                             <p className="text-sm font-bold text-[#2c2455]">
                               {adminSelectedMentor.full_name ||
-                                "Unnamed mentor"}
+                                "Unnamed volunteer"}
                             </p>
                             <p className="text-sm text-[#5c5385]">
                               Status: {adminSelectedMentor.approval_status} -{" "}
@@ -2785,7 +2828,7 @@ export default function Home() {
                             >
                               {adminActionUserId === adminSelectedMentor.id
                                 ? "Removing..."
-                                : "Remove mentor listing + access"}
+                                : "Remove volunteer listing + access"}
                             </button>
                           </div>
                           <p className="text-sm text-[#4f4578]">
@@ -2813,11 +2856,11 @@ export default function Home() {
 
                           <div className="pt-2">
                             <p className="text-sm font-bold text-[#2c2455]">
-                              Mentee requests
+                              Caregiver requests
                             </p>
                             {adminSelectedMentorRequests.length === 0 ? (
                               <p className="mt-1 text-sm text-[#5c5385]">
-                                No requests for this mentor yet.
+                                No requests for this volunteer yet.
                               </p>
                             ) : (
                               <div className="mt-2 space-y-2">
@@ -2828,7 +2871,7 @@ export default function Home() {
                                   >
                                     <p className="text-sm font-bold text-[#2c2455]">
                                       {request.mentee_profile?.full_name ||
-                                        "Unnamed mentee"}
+                                        "Unnamed caregiver"}
                                     </p>
                                     <p className="text-xs text-[#5c5385]">
                                       {request.status} -{" "}
@@ -2859,24 +2902,24 @@ export default function Home() {
                 <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <h3 className="text-2xl font-bold text-[#2c2455]">
+                      <h3 className="workspace-heading text-2xl font-bold text-[#2c2455]">
                         {showMentorDirectory
-                          ? "All mentors"
+                          ? "All volunteers"
                           : "Browse volunteers"}
                       </h3>
                       <p className="mt-1 text-sm text-[#5c5385]">
                         {showMentorDirectory
-                          ? "Preview every approved mentor currently visible in the directory."
+                          ? "Preview every approved volunteer currently visible in the directory."
                           : "Select one volunteer to request a match."}
                       </p>
                     </div>
                     <p className="rounded-full bg-[#f0ecff] px-4 py-2 text-xs font-bold text-[#4a3c86]">
-                      {filteredVolunteers.length} of {volunteers.length} mentors
+                      {filteredVolunteers.length} of {volunteers.length} volunteers
                     </p>
                   </div>
                   {isLoadingVolunteers && (
                     <p className="mt-3 text-sm text-[#5c5385]">
-                      Loading mentors from backend...
+                      Loading volunteers from backend...
                     </p>
                   )}
                   {volunteerLoadError && (
@@ -3002,7 +3045,7 @@ export default function Home() {
                       </h4>
                       <p className="mt-2 text-sm text-[#5c5385]">
                         Try clearing your search, changing filters, or checking
-                        your backend token and mentor visibility settings.
+                        your backend token and volunteer visibility settings.
                       </p>
                     </article>
                   )}
@@ -3012,20 +3055,13 @@ export default function Home() {
                   <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
                     <div className="flex items-center justify-between gap-2">
                       <div>
-                        <h3 className="text-2xl font-bold text-[#2c2455]">
+                        <h3 className="workspace-heading text-2xl font-bold text-[#2c2455]">
                           Your sent requests
                         </h3>
                         <p className="mt-1 text-sm text-[#5c5385]">
-                          Track all mentor requests you have submitted.
+                          Track all volunteer requests you have submitted.
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={loadMenteeRequestsData}
-                        className="rounded-full bg-[#f0ecff] px-4 py-2 text-xs font-bold text-[#4a3c86] hover:bg-[#e0d8fb]"
-                      >
-                        Refresh
-                      </button>
                     </div>
 
                     {isLoadingMenteeRequests && (
@@ -3054,7 +3090,7 @@ export default function Home() {
                           className="rounded-2xl border border-[#e5e0f4] bg-white p-4"
                         >
                           <p className="text-base font-bold text-[#2c2455]">
-                            {request.mentor_profile?.full_name || "Unknown mentor"}
+                            {request.mentor_profile?.full_name || "Unknown volunteer"}
                           </p>
                           <p className="text-sm text-[#5c5385]">
                             Status: {request.status} - Sent{" "}
@@ -3062,7 +3098,7 @@ export default function Home() {
                           </p>
                           {request.status === "active" && request.mentor_email && (
                             <p className="mt-1 text-sm text-[#4f4578]">
-                              <span className="font-bold">Mentor email:</span>{" "}
+                              <span className="font-bold">Volunteer email:</span>{" "}
                               {request.mentor_email}
                             </p>
                           )}
@@ -3071,13 +3107,23 @@ export default function Home() {
                               {request.mentor_profile.bio}
                             </p>
                           )}
+                          {request.status === "declined" && (
+                            <div className="mt-3 rounded-xl border border-[#f1cccc] bg-[#fff5f5] p-3">
+                              <p className="font-bold text-[#8f2525]">
+                                This volunteer declined the request.
+                              </p>
+                              <p className="mt-1 text-sm text-[#6f3434]">
+                                Choose another available volunteer above to send a new request.
+                              </p>
+                            </div>
+                          )}
                         </article>
                       ))}
                     </div>
                   </section>
                 )}
 
-                {showMenteeExperience && (
+                {showMenteeExperience && selectedVolunteer && (
                   <section className="sticky bottom-4 rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-lg">
                     <div className="flex flex-col gap-4">
                       <div>
@@ -3085,9 +3131,7 @@ export default function Home() {
                           Current selection
                         </p>
                         <p className="text-lg font-bold text-[#2c2455]">
-                          {selectedVolunteer
-                            ? `${selectedVolunteer.name} (${selectedVolunteer.city})`
-                            : "No volunteer selected"}
+                          {selectedVolunteer.name} ({selectedVolunteer.city})
                         </p>
                       </div>
 
@@ -3128,24 +3172,6 @@ export default function Home() {
                             </select>
                           </div>
 
-                          <div className="md:col-span-2 flex flex-col gap-2">
-                            <label
-                              htmlFor="volunteer-message"
-                              className="text-sm font-bold text-[#3f346c]"
-                            >
-                              Message to volunteer
-                            </label>
-                            <textarea
-                              id="volunteer-message"
-                              value={messageToVolunteer}
-                              onChange={(event) =>
-                                setMessageToVolunteer(event.target.value)
-                              }
-                              placeholder="Share a short note about your situation and what support would help most."
-                              rows={3}
-                              className="resize-y rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
-                            />
-                          </div>
                         </div>
                       )}
 
@@ -3161,8 +3187,7 @@ export default function Home() {
                         disabled={
                           isSendingMatch ||
                           !selectedVolunteer ||
-                          !careType ||
-                          !messageToVolunteer.trim()
+                          !careType
                         }
                         className="rounded-full bg-[#7a63b7] px-5 py-3 text-sm font-bold text-white transition enabled:hover:bg-[#654ea5] disabled:cursor-not-allowed disabled:bg-slate-300"
                       >
@@ -3185,14 +3210,14 @@ export default function Home() {
               Your request was sent to {selectedVolunteer.name}.
             </h3>
             <p className="mt-3 max-w-3xl text-[#4f4578]">
-              Thank you for submitting your request. The mentor can now accept
-              or reject it and send you a message to connect.
+              Thank you for submitting your request. The volunteer can now accept
+              or decline it. You will receive an email when the status changes.
             </p>
 
             <div className="mt-6 grid gap-4 md:grid-cols-2">
               <section className="rounded-2xl bg-[#f7f4ff] p-4">
                 <h4 className="mb-3 text-sm font-extrabold uppercase tracking-[0.08em] text-[#6d57b8]">
-                  Requested Mentor
+                  Requested Volunteer
                 </h4>
                 <p className="text-sm text-[#4f4578]">
                   <span className="font-bold">Volunteer:</span>{" "}
@@ -3216,12 +3241,6 @@ export default function Home() {
                   <span className="font-bold">Care type needed:</span>{" "}
                   {careType}
                 </p>
-                <p className="mt-2 text-sm font-bold text-[#4f4578]">
-                  Message:
-                </p>
-                <p className="mt-1 rounded-xl border border-[#ddd5f4] bg-white p-3 text-sm leading-6 text-[#4f4578]">
-                  {messageToVolunteer}
-                </p>
               </section>
             </div>
 
@@ -3230,7 +3249,7 @@ export default function Home() {
               onClick={handleRequestAnotherMentor}
               className="mt-6 rounded-full bg-[#2c2455] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#201943]"
             >
-              Request another mentor
+              View request status
             </button>
           </section>
         )}
@@ -3281,6 +3300,29 @@ export default function Home() {
 
               {!isProfileLoading && (
                 <div className="mt-5 grid gap-3 md:grid-cols-2">
+                  <div className="flex flex-col gap-2">
+                    <label
+                      htmlFor="profile-username"
+                      className="text-sm font-bold text-[#3f346c]"
+                    >
+                      Username
+                    </label>
+                    <input
+                      id="profile-username"
+                      type="text"
+                      value={profileForm.username}
+                      onChange={(event) =>
+                        setProfileForm((current) => ({
+                          ...current,
+                          username: event.target.value,
+                        }))
+                      }
+                      minLength={3}
+                      maxLength={30}
+                      pattern="[A-Za-z0-9_]+"
+                      className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                    />
+                  </div>
                   <div className="flex flex-col gap-2">
                     <label
                       htmlFor="profile-full-name"
@@ -3425,7 +3467,7 @@ export default function Home() {
                           htmlFor="profile-visible"
                           className="text-sm font-bold text-[#3f346c]"
                         >
-                          Show my mentor profile to mentees
+                          Accepting new caregiver matches
                         </label>
                       </div>
                     </>

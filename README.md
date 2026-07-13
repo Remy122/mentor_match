@@ -3,7 +3,7 @@
 This repository is split into dedicated app directories:
 
 - `frontend/` - Next.js web application
-- `backend/` - FastAPI backend service (Supabase + Resend integration target)
+- `backend/` - FastAPI backend service using Supabase and Resend
 
 ## Frontend (Next.js)
 
@@ -26,4 +26,4 @@ Frontend env setup:
 
 ## Backend (FastAPI)
 
-The `backend` folder is reserved for the Python API service. See `backend/README.md` for the planned structure.
+See `backend/README.md` for database migrations, environment setup, and local commands.

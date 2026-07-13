@@ -3,7 +3,7 @@ from typing import Any
 
 import jwt
 from fastapi import Depends, Header, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.supabase import get_supabase_client
@@ -12,7 +12,7 @@ from app.core.supabase import get_supabase_client
 class AuthUser(BaseModel):
     id: str
     email: str | None = None
-    claims: dict[str, Any] = {}
+    claims: dict[str, Any] = Field(default_factory=dict)
 
 
 def _issuer() -> str:

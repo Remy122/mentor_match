@@ -1,20 +1,13 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
 
 from app.core.auth import AuthUser, require_auth
+from app.core.profiles import get_profiles_by_ids
 from app.core.supabase import get_supabase_client
+from app.schemas.volunteer_hours import VolunteerHoursPayload
 
 router = APIRouter(prefix="/volunteer-hours", tags=["volunteer-hours"])
-
-
-class VolunteerHoursPayload(BaseModel):
-    match_id: int
-    meeting_date: str
-    hours: float
-    next_meeting: str | None = None
-    topics_discussed: str
 
 
 @router.post("")
@@ -48,6 +41,7 @@ def log_hours(payload: VolunteerHoursPayload, current_user: AuthUser = Depends(r
                 "hours": payload.hours,
                 "next_meeting": payload.next_meeting,
                 "topics_discussed": payload.topics_discussed,
+                "anything_to_flag": payload.anything_to_flag,
             }
         )
         .execute()
@@ -98,17 +92,11 @@ def list_hours(current_user: AuthUser = Depends(require_auth)) -> dict[str, Any]
             if row.get("mentee_id")
         }
     )
-    participant_profiles: dict[str, Any] = {}
-    if participant_ids:
-        profiles_result = (
-            supabase.table("profiles")
-            .select("id,full_name")
-            .in_("id", participant_ids)
-            .execute()
-        )
-        participant_profiles = {
-            profile["id"]: profile for profile in (profiles_result.data or [])
-        }
+    participant_profiles = get_profiles_by_ids(
+        supabase,
+        participant_ids,
+        "id,full_name",
+    )
 
     enriched_entries = [
         {

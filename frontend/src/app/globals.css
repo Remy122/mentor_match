@@ -62,6 +62,72 @@ textarea:focus-visible {
   transform: translateY(-1px);
 }
 
+.workspace-tabs {
+  overflow-x: auto;
+  padding: 2px 0;
+}
+
+.workspace-tabs > div {
+  min-width: max-content;
+}
+
+.workspace-heading {
+  position: relative;
+  padding-left: 14px;
+}
+
+.workspace-heading::before {
+  content: "";
+  position: absolute;
+  top: 0.15em;
+  bottom: 0.15em;
+  left: 0;
+  width: 4px;
+  border-radius: 999px;
+  background: #7a63b7;
+}
+
+.request-record {
+  overflow: hidden;
+}
+
+.request-record-header {
+  background: #ffffff;
+}
+
+.request-label {
+  color: #6d57b8;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.request-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  border-radius: 999px;
+  padding: 0 12px;
+  background: #f0ecff;
+  color: #4a3c86;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: capitalize;
+}
+
+.request-status-active {
+  background: #e8f7ef;
+  color: #17603a;
+}
+
+.request-status-cancelled,
+.request-status-declined,
+.request-status-rejected {
+  background: #fff0f0;
+  color: #9b2c2c;
+}
+
 .pop-in {
   animation: popIn 180ms ease-out;
 }
@@ -76,6 +142,26 @@ textarea:focus-visible {
 .hover-lift:hover {
   transform: translateY(-2px);
   box-shadow: 0 10px 24px rgba(44, 36, 85, 0.12);
+}
+
+@supports (content-visibility: auto) {
+  .admin-section,
+  .request-record,
+  .hover-lift {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 280px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 @keyframes popIn {

@@ -26,13 +26,32 @@ def test_auth_sync_profile_and_get_me(client, fake_supabase, monkeypatch):
 
     sync_response = client.post(
         "/api/auth/sync-profile",
-        json={"role": "mentor", "skills": ["peer support"], "availability": "weekdays"},
+        json={
+            "role": "mentor",
+            "username": "volunteer_one",
+            "skills": ["peer support"],
+            "availability": "weekdays",
+        },
     )
     assert sync_response.status_code == 200
     payload = sync_response.json()
     assert payload["profile"]["full_name"] == "Mentor One"
     assert payload["profile"]["approval_status"] == "pending"
+    assert payload["profile"]["username"] == "volunteer_one"
+    assert payload["profile"]["is_visible"] is False
     assert payload["mentor_profile"]["skills"] == ["peer support"]
+
+    role_change_response = client.post(
+        "/api/auth/sync-profile",
+        json={
+            "role": "mentee",
+            "username": "volunteer_one",
+            "goals": "This must not change the approved account role.",
+        },
+    )
+    assert role_change_response.status_code == 200
+    assert role_change_response.json()["profile"]["role"] == "mentor"
+    assert role_change_response.json()["mentee_profile"] is None
 
     me_response = client.get("/api/auth/me")
     assert me_response.status_code == 200
@@ -93,7 +112,14 @@ def test_admin_approve_reject_and_remove_access(client, fake_supabase, monkeypat
         },
     ]
     fake_supabase.tables["matches"] = [
-        {"id": 11, "mentor_id": "mentor-1", "mentee_id": "mentee-1", "status": "pending"}
+        {
+            "id": 11,
+            "mentor_id": "mentor-1",
+            "mentee_id": "mentee-1",
+            "status": "pending",
+            "care_type": "Navigation",
+            "created_at": "2026-01-02T00:00:00Z",
+        }
     ]
 
     app.dependency_overrides[require_admin_role] = lambda: AuthUser(
@@ -105,6 +131,13 @@ def test_admin_approve_reject_and_remove_access(client, fake_supabase, monkeypat
     pending_response = client.get("/api/admin/pending-users")
     assert pending_response.status_code == 200
     assert len(pending_response.json()["pending_users"]) == 2
+
+    matches_response = client.get("/api/admin/matches")
+    assert matches_response.status_code == 200
+    admin_match = matches_response.json()["matches"][0]
+    assert admin_match["volunteer_profile"]["full_name"] == "Mentor One"
+    assert admin_match["caregiver_profile"]["full_name"] == "Mentee One"
+    assert matches_response.json()["status_counts"] == {"pending": 1}
 
     approve_response = client.post("/api/admin/users/mentor-1/approve")
     assert approve_response.status_code == 200
@@ -124,3 +157,32 @@ def test_admin_approve_reject_and_remove_access(client, fake_supabase, monkeypat
     match = fake_supabase.tables["matches"][0]
     assert match["status"] == "cancelled"
 
+
+def test_large_admin_response_is_compressed(client, fake_supabase, monkeypatch):
+    _wire_supabase(monkeypatch, fake_supabase)
+    fake_supabase.tables["profiles"] = [
+        {
+            "id": f"pending-{index}",
+            "role": "mentor",
+            "full_name": f"Pending Volunteer {index}",
+            "bio": "Profile details " * 30,
+            "approval_status": "pending",
+            "is_visible": False,
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+        for index in range(20)
+    ]
+    app.dependency_overrides[require_admin_role] = lambda: AuthUser(
+        id="admin-1",
+        email="admin@example.com",
+        claims={},
+    )
+
+    response = client.get(
+        "/api/admin/pending-users",
+        headers={"Accept-Encoding": "gzip"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "gzip"
+    assert len(response.json()["pending_users"]) == 20

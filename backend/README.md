@@ -1,32 +1,31 @@
 # Backend Service
 
-backend for the OCGO mentor platform.
+FastAPI service for the OCGO caregiver and volunteer matching portal.
 
 ## Stack
 
 - FastAPI (API layer)
 - Supabase Auth + Postgres (identity and data)
-
-TODO:
-Email send functionality
+- Resend (account and match notifications)
 
 ## Current Structure
 
 - `app/main.py` - FastAPI app + CORS + `/health`
 - `app/api/router.py` - top-level API router
-- `app/api/routes/auth.py` - profile/auth route stubs
-- `app/api/routes/admin.py` - approval/dashboard route stubs
-- `app/api/routes/matches.py` - mentor browse/match route stubs
-- `app/api/routes/volunteer_hours.py` - volunteer hours route stubs
+- `app/api/routes/auth.py` - profile and authentication routes
+- `app/api/routes/admin.py` - approvals, dashboard, and oversight
+- `app/api/routes/matches.py` - volunteer browsing and match lifecycle
+- `app/api/routes/volunteer_hours.py` - volunteer-hour logs
 - `app/core/config.py` - environment settings
-- `app/core/auth.py` - temporary auth/admin guards (replace with JWT verification)
+- `app/core/auth.py` - Supabase JWT and role guards
 
 ## Run Locally
 
-1. Create and activate a virtual environment.
-2. Install dependencies:
+1. Apply the SQL files in `migrations/` in numeric order.
+2. Create and activate a virtual environment.
+3. Install dependencies:
    - `pip install -r requirements.txt`
-3. Copy env template:
+4. Copy env template:
    - `copy .env.example .env`
-4. Start dev server:
+5. Start dev server:
    - `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`

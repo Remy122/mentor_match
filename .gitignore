@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/.pytest_cache/
+backend/.pytest_cache/
 
 # next.js
 /.next/
@@ -46,3 +48,4 @@ backend/.venv/
 
 **/__pycache__/
 *.pyc
+*.log

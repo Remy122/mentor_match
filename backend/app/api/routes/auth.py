@@ -1,72 +1,53 @@
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Header, status
-from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.auth import AuthUser, require_auth, _decode_bearer_token
+from app.core.profiles import get_profile, get_role_profile
 from app.core.supabase import get_supabase_client
+from app.schemas.auth import MeResponse, ProfileSyncRequest, ProfileUpdateRequest
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-class ProfileSyncRequest(BaseModel):
-    role: Literal["mentor", "mentee"] | None = None
-    full_name: str | None = None
-    bio: str | None = None
-    profile_picture_url: str | None = None
-    skills: list[str] | None = None
-    availability: str | None = None
-    goals: str | None = None
-    interests: list[str] | None = None
-
-
-class ProfileUpdateRequest(BaseModel):
-    full_name: str | None = None
-    bio: str | None = None
-    profile_picture_url: str | None = None
-    is_visible: bool | None = None
-    skills: list[str] | None = None
-    availability: str | None = None
-    goals: str | None = None
-    interests: list[str] | None = None
-
-
-class MeResponse(BaseModel):
-    profile: dict[str, Any]
-    mentor_profile: dict[str, Any] | None = None
-    mentee_profile: dict[str, Any] | None = None
-
-
 def _get_profile_or_404(user_id: str) -> dict[str, Any]:
     supabase = get_supabase_client()
-    result = supabase.table("profiles").select("*").eq("id", user_id).limit(1).execute()
-    if not result.data:
+    profile = get_profile(supabase, user_id)
+    if not profile:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
-    return result.data[0]
+    return profile
 
 
 def _get_role_profile(user_id: str, role: str) -> dict[str, Any] | None:
     supabase = get_supabase_client()
-    if role == "mentor":
-        result = supabase.table("mentor_profiles").select("*").eq("id", user_id).limit(1).execute()
-        return result.data[0] if result.data else None
+    return get_role_profile(supabase, user_id, role)
 
-    if role == "mentee":
-        result = supabase.table("mentee_profiles").select("*").eq("id", user_id).limit(1).execute()
-        return result.data[0] if result.data else None
 
-    return None
+def _ensure_username_available(
+    supabase: Any,
+    username: str,
+    user_id: str,
+) -> str:
+    normalized = username.strip()
+    result = supabase.table("profiles").select("id,username").execute()
+    for profile in result.data or []:
+        existing = profile.get("username")
+        if existing and existing.lower() == normalized.lower() and profile.get("id") != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="That username is already in use.",
+            )
+    return normalized
 
 
 @router.post("/sync-profile", response_model=MeResponse)
 def sync_profile(payload: ProfileSyncRequest, current_user: AuthUser = Depends(require_auth)) -> MeResponse:
     supabase = get_supabase_client()
 
-    existing = supabase.table("profiles").select("*").eq("id", current_user.id).limit(1).execute()
-    existing_profile = existing.data[0] if existing.data else None
+    existing_profile = get_profile(supabase, current_user.id)
 
     metadata_role = None
     raw_user_metadata = current_user.claims.get("user_metadata")
@@ -75,14 +56,27 @@ def sync_profile(payload: ProfileSyncRequest, current_user: AuthUser = Depends(r
         if isinstance(role_value, str):
             metadata_role = role_value.strip().lower()
 
-    desired_role = payload.role or (existing_profile.get("role") if existing_profile else metadata_role or "mentee")
-    if desired_role not in {"mentor", "mentee"}:
+    if existing_profile:
+        desired_role = existing_profile.get("role") or "mentee"
+    else:
+        desired_role = payload.role or metadata_role or "mentee"
+    if desired_role not in {"admin", "mentor", "mentee"}:
         desired_role = "mentee"
 
     profile_fields: dict[str, Any] = {
         "id": current_user.id,
         "role": desired_role,
     }
+    metadata_username = None
+    if isinstance(raw_user_metadata, dict):
+        metadata_username = raw_user_metadata.get("username")
+    requested_username = payload.username or metadata_username
+    if requested_username and isinstance(requested_username, str):
+        profile_fields["username"] = _ensure_username_available(
+            supabase,
+            requested_username,
+            current_user.id,
+        )
     metadata_full_name = None
     if isinstance(raw_user_metadata, dict):
         metadata_full_name = raw_user_metadata.get("full_name")
@@ -106,7 +100,7 @@ def sync_profile(payload: ProfileSyncRequest, current_user: AuthUser = Depends(r
 
     if not existing_profile:
         profile_fields["approval_status"] = "pending"
-        profile_fields.setdefault("is_visible", desired_role == "mentor")
+        profile_fields.setdefault("is_visible", False)
 
     supabase.table("profiles").upsert(profile_fields).execute()
 
@@ -151,6 +145,12 @@ def update_me(payload: ProfileUpdateRequest, current_user: AuthUser = Depends(re
     target_role = profile["role"]
 
     profile_updates: dict[str, Any] = {}
+    if payload.username is not None:
+        profile_updates["username"] = _ensure_username_available(
+            supabase,
+            payload.username,
+            current_user.id,
+        )
     if payload.full_name is not None:
         profile_updates["full_name"] = payload.full_name
     if payload.bio is not None:
