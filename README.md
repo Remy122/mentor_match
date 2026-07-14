@@ -24,6 +24,13 @@ Frontend env setup:
   - `NEXT_PUBLIC_SUPABASE_URL`
   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
+Supabase Auth setup:
+
+- In the Supabase dashboard, open Authentication > Providers > Email.
+- Turn off `Confirm email`. The portal uses immediate email/password signup;
+  admin profile approval remains the gate before a new user can access portal
+  features.
+
 ## Backend (FastAPI)
 
 See `backend/README.md` for database migrations, environment setup, and local commands.

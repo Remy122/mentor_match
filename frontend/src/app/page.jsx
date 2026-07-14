@@ -1207,7 +1207,7 @@ export default function Home() {
           setAuthSuccess("Account created and profile initialized.");
         } else {
           setAuthSuccess(
-            "Account created. Confirm your email, then sign in to finish profile setup.",
+            "Account created, but email confirmation is still enabled in Supabase. Ask an administrator to disable Confirm email, then sign in.",
           );
           setAuthMode("signin");
         }
