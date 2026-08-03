@@ -15,6 +15,61 @@ def _wire_supabase(monkeypatch, fake_supabase):
     monkeypatch.setattr(hours_routes, "get_supabase_client", lambda: fake_supabase)
 
 
+def test_volunteer_directory_defaults_to_same_university(
+    client, fake_supabase, monkeypatch
+):
+    _wire_supabase(monkeypatch, fake_supabase)
+    fake_supabase.tables["profiles"] = [
+        {
+            "id": "mentee-1",
+            "role": "mentee",
+            "full_name": "Caregiver",
+            "university": "University of Toronto",
+            "approval_status": "approved",
+            "is_visible": False,
+            "created_at": "2026-01-01T00:00:00Z",
+        },
+        {
+            "id": "mentor-1",
+            "role": "mentor",
+            "full_name": "Toronto Volunteer",
+            "university": "University of Toronto",
+            "approval_status": "approved",
+            "is_visible": True,
+            "created_at": "2026-01-02T00:00:00Z",
+        },
+        {
+            "id": "mentor-2",
+            "role": "mentor",
+            "full_name": "Waterloo Volunteer",
+            "university": "University of Waterloo",
+            "approval_status": "approved",
+            "is_visible": True,
+            "created_at": "2026-01-03T00:00:00Z",
+        },
+    ]
+    app.dependency_overrides[require_auth] = lambda: AuthUser(
+        id="mentee-1", email="mentee@example.com", claims={}
+    )
+
+    same_university = client.get("/api/matches/mentors/available")
+    assert same_university.status_code == 200
+    assert [row["id"] for row in same_university.json()["mentors"]] == [
+        "mentor-1"
+    ]
+    assert same_university.json()["includes_other_universities"] is False
+
+    all_universities = client.get(
+        "/api/matches/mentors/available?include_other_universities=true"
+    )
+    assert all_universities.status_code == 200
+    assert [row["id"] for row in all_universities.json()["mentors"]] == [
+        "mentor-1",
+        "mentor-2",
+    ]
+    assert all_universities.json()["includes_other_universities"] is True
+
+
 def test_matching_lifecycle_and_resubmission(client, fake_supabase, monkeypatch):
     _wire_supabase(monkeypatch, fake_supabase)
 

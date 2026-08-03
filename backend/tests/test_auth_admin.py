@@ -29,6 +29,7 @@ def test_auth_sync_profile_and_get_me(client, fake_supabase, monkeypatch):
         json={
             "role": "mentor",
             "username": "volunteer_one",
+            "university": "University of Toronto",
             "skills": ["peer support"],
             "availability": "weekdays",
         },
@@ -38,6 +39,7 @@ def test_auth_sync_profile_and_get_me(client, fake_supabase, monkeypatch):
     assert payload["profile"]["full_name"] == "Mentor One"
     assert payload["profile"]["approval_status"] == "pending"
     assert payload["profile"]["username"] == "volunteer_one"
+    assert payload["profile"]["university"] == "University of Toronto"
     assert payload["profile"]["is_visible"] is False
     assert payload["mentor_profile"]["skills"] == ["peer support"]
 
@@ -79,6 +81,7 @@ def test_auth_update_profile(client, fake_supabase, monkeypatch):
         "/api/auth/me",
         json={
             "full_name": "Updated Name",
+            "university": "McMaster University",
             "goals": "better support",
             "interests": ["navigation", "burnout"],
         },
@@ -86,8 +89,15 @@ def test_auth_update_profile(client, fake_supabase, monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["profile"]["full_name"] == "Updated Name"
+    assert payload["profile"]["university"] == "McMaster University"
     assert payload["mentee_profile"]["goals"] == "better support"
     assert payload["mentee_profile"]["interests"] == ["navigation", "burnout"]
+
+    invalid_university = client.patch(
+        "/api/auth/me",
+        json={"university": "Somewhere Outside Ontario"},
+    )
+    assert invalid_university.status_code == 422
 
 
 def test_admin_approve_reject_and_remove_access(client, fake_supabase, monkeypatch):
@@ -98,6 +108,7 @@ def test_admin_approve_reject_and_remove_access(client, fake_supabase, monkeypat
             "id": "mentor-1",
             "role": "mentor",
             "full_name": "Mentor One",
+            "university": "University of Toronto",
             "approval_status": "pending",
             "is_visible": False,
             "created_at": "2026-01-01T00:00:00Z",
@@ -106,6 +117,7 @@ def test_admin_approve_reject_and_remove_access(client, fake_supabase, monkeypat
             "id": "mentee-1",
             "role": "mentee",
             "full_name": "Mentee One",
+            "university": "University of Toronto",
             "approval_status": "pending",
             "is_visible": False,
             "created_at": "2026-01-01T00:00:00Z",

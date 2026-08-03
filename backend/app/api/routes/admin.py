@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.auth import AuthUser, require_admin_role
 from app.core.profiles import get_profiles_by_ids
 from app.core.supabase import get_supabase_client
+from app.core.universities import UNIVERSITY_NOT_SELECTED
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -15,7 +16,7 @@ def get_pending_users(_: AuthUser = Depends(require_admin_role)) -> dict[str, li
     result = (
         supabase.table("profiles")
         .select(
-            "id,role,username,full_name,bio,profile_picture_url,approval_status,is_visible,created_at,"
+            "id,role,username,full_name,bio,profile_picture_url,university,approval_status,is_visible,created_at,"
             "mentor_profiles(skills,availability,total_hours),"
             "mentee_profiles(goals,interests)"
         )
@@ -33,7 +34,7 @@ def get_reviewed_users(_: AuthUser = Depends(require_admin_role)) -> dict[str, l
     result = (
         supabase.table("profiles")
         .select(
-            "id,role,username,full_name,bio,profile_picture_url,approval_status,is_visible,created_at,"
+            "id,role,username,full_name,bio,profile_picture_url,university,approval_status,is_visible,created_at,"
             "mentor_profiles(skills,availability,total_hours),"
             "mentee_profiles(goals,interests)"
         )
@@ -48,11 +49,25 @@ def get_reviewed_users(_: AuthUser = Depends(require_admin_role)) -> dict[str, l
 @router.post("/users/{user_id}/approve")
 def approve_user(user_id: str, _: AuthUser = Depends(require_admin_role)) -> dict[str, str]:
     supabase = get_supabase_client()
-    profile_result = supabase.table("profiles").select("id,role").eq("id", user_id).limit(1).execute()
+    profile_result = (
+        supabase.table("profiles")
+        .select("id,role,university")
+        .eq("id", user_id)
+        .limit(1)
+        .execute()
+    )
     if not profile_result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
     role = profile_result.data[0]["role"]
+    university = profile_result.data[0].get("university")
+    if role in {"mentor", "mentee"} and (
+        not university or university == UNIVERSITY_NOT_SELECTED
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The applicant must select an Ontario university before approval.",
+        )
     is_visible = True if role == "mentor" else False
 
     supabase.table("profiles").update(
@@ -160,7 +175,7 @@ def get_admin_matches(_: AuthUser = Depends(require_admin_role)) -> dict[str, An
     profiles = get_profiles_by_ids(
         supabase,
         profile_ids,
-        "id,username,full_name,profile_picture_url",
+        "id,username,full_name,profile_picture_url,university",
     )
 
     status_counts: dict[str, int] = {}
@@ -183,7 +198,7 @@ def get_admin_mentors(_: AuthUser = Depends(require_admin_role)) -> dict[str, li
     supabase = get_supabase_client()
     result = (
         supabase.table("profiles")
-        .select("id,username,full_name,bio,profile_picture_url,is_visible,approval_status,mentor_profiles(skills,availability,total_hours)")
+        .select("id,username,full_name,bio,profile_picture_url,university,is_visible,approval_status,mentor_profiles(skills,availability,total_hours)")
         .eq("role", "mentor")
         .eq("approval_status", "approved")
         .order("created_at", desc=False)

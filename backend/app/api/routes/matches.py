@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.email import send_email
 from app.core.profiles import get_auth_email, get_profile, get_profiles_by_ids
 from app.core.supabase import get_supabase_client
+from app.core.universities import UNIVERSITY_NOT_SELECTED
 from app.schemas.matches import MatchRequestPayload, MentorDecisionPayload
 
 router = APIRouter(prefix="/matches", tags=["matches"])
@@ -31,7 +32,10 @@ def _queue_emails(
 
 
 @router.get("/mentors/available")
-def get_available_mentors(current_user: AuthUser = Depends(require_auth)) -> dict[str, list[dict[str, Any]]]:
+def get_available_mentors(
+    include_other_universities: bool = False,
+    current_user: AuthUser = Depends(require_auth),
+) -> dict[str, Any]:
     supabase = get_supabase_client()
 
     requester = get_profile(supabase, current_user.id)
@@ -46,16 +50,34 @@ def get_available_mentors(current_user: AuthUser = Depends(require_auth)) -> dic
             detail="Only approved mentees, mentors, or admins can browse mentors.",
         )
 
-    mentors_result = (
+    mentors_query = (
         supabase.table("profiles")
-        .select("id,full_name,bio,profile_picture_url,is_visible,approval_status,mentor_profiles(skills,availability)")
+        .select("id,full_name,bio,profile_picture_url,university,is_visible,approval_status,mentor_profiles(skills,availability)")
         .eq("role", "mentor")
         .eq("approval_status", "approved")
         .eq("is_visible", True)
-        .order("created_at", desc=False)
-        .execute()
     )
-    return {"mentors": mentors_result.data or []}
+
+    requester_university = requester.get("university")
+    if (
+        not is_approved_admin
+        and (not requester_university or requester_university == UNIVERSITY_NOT_SELECTED)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select your university in Settings before browsing volunteers.",
+        )
+
+    should_filter_by_university = not is_approved_admin and not include_other_universities
+    if should_filter_by_university:
+        mentors_query = mentors_query.eq("university", requester_university)
+
+    mentors_result = mentors_query.order("created_at", desc=False).execute()
+    return {
+        "mentors": mentors_result.data or [],
+        "university": requester_university,
+        "includes_other_universities": is_approved_admin or include_other_universities,
+    }
 
 
 @router.get("/mentor-requests")
@@ -83,7 +105,7 @@ def get_mentor_requests(current_user: AuthUser = Depends(require_auth)) -> dict[
     mentee_profiles = get_profiles_by_ids(
         supabase,
         (match.get("mentee_id") for match in matches),
-        "id,full_name,bio,profile_picture_url,approval_status",
+        "id,full_name,bio,profile_picture_url,university,approval_status",
     )
 
     enriched = []
@@ -128,7 +150,7 @@ def get_my_requests(current_user: AuthUser = Depends(require_auth)) -> dict[str,
     mentor_profiles = get_profiles_by_ids(
         supabase,
         (request.get("mentor_id") for request in requests),
-        "id,full_name,bio,profile_picture_url,approval_status",
+        "id,full_name,bio,profile_picture_url,university,approval_status",
     )
 
     enriched = []
@@ -156,7 +178,7 @@ def get_mentor_requests_for_admin(
 
     mentor_result = (
         supabase.table("profiles")
-        .select("id,full_name,bio,profile_picture_url,is_visible,approval_status,mentor_profiles(skills,availability,total_hours)")
+        .select("id,full_name,bio,profile_picture_url,university,is_visible,approval_status,mentor_profiles(skills,availability,total_hours)")
         .eq("id", mentor_id)
         .eq("role", "mentor")
         .limit(1)
@@ -178,7 +200,7 @@ def get_mentor_requests_for_admin(
     mentee_profiles = get_profiles_by_ids(
         supabase,
         (match.get("mentee_id") for match in matches),
-        "id,full_name,bio,profile_picture_url,approval_status",
+        "id,full_name,bio,profile_picture_url,university,approval_status",
     )
 
     enriched_requests = [

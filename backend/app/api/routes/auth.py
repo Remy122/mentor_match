@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.auth import AuthUser, require_auth, _decode_bearer_token
 from app.core.profiles import get_profile, get_role_profile
 from app.core.supabase import get_supabase_client
+from app.core.universities import normalize_ontario_university
 from app.schemas.auth import MeResponse, ProfileSyncRequest, ProfileUpdateRequest
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -40,6 +41,16 @@ def _ensure_username_available(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="That username is already in use.",
             )
+    return normalized
+
+
+def _validate_university(university: str) -> str:
+    normalized = normalize_ontario_university(university)
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Select a valid Ontario university.",
+        )
     return normalized
 
 
@@ -97,6 +108,13 @@ def sync_profile(payload: ProfileSyncRequest, current_user: AuthUser = Depends(r
         profile_fields["bio"] = payload.bio
     if payload.profile_picture_url is not None:
         profile_fields["profile_picture_url"] = payload.profile_picture_url
+
+    metadata_university = None
+    if isinstance(raw_user_metadata, dict):
+        metadata_university = raw_user_metadata.get("university")
+    requested_university = payload.university or metadata_university
+    if requested_university and isinstance(requested_university, str):
+        profile_fields["university"] = _validate_university(requested_university)
 
     if not existing_profile:
         profile_fields["approval_status"] = "pending"
@@ -157,6 +175,8 @@ def update_me(payload: ProfileUpdateRequest, current_user: AuthUser = Depends(re
         profile_updates["bio"] = payload.bio
     if payload.profile_picture_url is not None:
         profile_updates["profile_picture_url"] = payload.profile_picture_url
+    if payload.university is not None:
+        profile_updates["university"] = _validate_university(payload.university)
 
     if payload.is_visible is not None:
         if target_role != "mentor":

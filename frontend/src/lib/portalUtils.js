@@ -46,6 +46,13 @@ export function buildMentorAvailability(availability, mentorMode) {
   return cleanAvailability ? `${cleanMode} :: ${cleanAvailability}` : cleanMode;
 }
 
+export function formatUniversity(university) {
+  const normalized = typeof university === "string" ? university.trim() : "";
+  return !normalized || normalized === "University not selected"
+    ? "No affiliation"
+    : normalized;
+}
+
 export function normalizeMentor(mentor) {
   const mentorProfile = Array.isArray(mentor.mentor_profiles)
     ? mentor.mentor_profiles[0]
@@ -55,6 +62,7 @@ export function normalizeMentor(mentor) {
   return {
     id: mentor.id,
     name: mentor.full_name ?? "Unnamed volunteer",
+    university: formatUniversity(mentor.university),
     pronouns: "N/A",
     city: availabilityInfo.mentorMode,
     languages: [],
@@ -82,9 +90,9 @@ export function profilePayloadFromMetadata(metadata) {
     full_name:
       typeof metadata.full_name === "string" ? metadata.full_name : undefined,
     bio: typeof metadata.bio === "string" ? metadata.bio : undefined,
-    profile_picture_url:
-      typeof metadata.profile_picture_url === "string"
-        ? metadata.profile_picture_url
+    university:
+      typeof metadata.university === "string"
+        ? metadata.university
         : undefined,
   };
 

@@ -7,17 +7,20 @@ import {
   apiFetch,
   BACKEND_BASE_URL,
   buildMentorAvailability,
+  formatUniversity,
   normalizeMentor,
   parseCommaSeparated,
   parseMentorAvailability,
   profilePayloadFromMetadata,
 } from "../lib/portalUtils";
+import { ONTARIO_UNIVERSITIES } from "../lib/ontarioUniversities";
 import { supabase, hasSupabaseEnv } from "../lib/supabaseClient";
 
 export default function Home() {
   const [emailInput, setEmailInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [isUnlocked, setIsUnlocked] = useState(false);
+  const [isAuthPortalOpen, setIsAuthPortalOpen] = useState(false);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [authMode, setAuthMode] = useState("signin");
   const [authError, setAuthError] = useState("");
@@ -25,8 +28,8 @@ export default function Home() {
   const [signupRole, setSignupRole] = useState("mentee");
   const [signupUsername, setSignupUsername] = useState("");
   const [signupFullName, setSignupFullName] = useState("");
+  const [signupUniversity, setSignupUniversity] = useState("");
   const [signupBio, setSignupBio] = useState("");
-  const [signupProfilePictureUrl, setSignupProfilePictureUrl] = useState("");
   const [signupSkills, setSignupSkills] = useState("");
   const [signupMentorMode, setSignupMentorMode] = useState("Remote");
   const [signupAvailability, setSignupAvailability] = useState("");
@@ -44,8 +47,11 @@ export default function Home() {
   const [isLoadingMenteeRequests, setIsLoadingMenteeRequests] = useState(false);
   const [menteeRequestsError, setMenteeRequestsError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [universityFilter, setUniversityFilter] = useState("all");
   const [availabilityFilter, setAvailabilityFilter] = useState("all");
   const [specialtyFilter, setSpecialtyFilter] = useState("all");
+  const [includeOtherUniversities, setIncludeOtherUniversities] =
+    useState(false);
   const [profileData, setProfileData] = useState(null);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
@@ -55,8 +61,8 @@ export default function Home() {
     role: "mentee",
     username: "",
     fullName: "",
+    university: "",
     bio: "",
-    profilePictureUrl: "",
     isVisible: false,
     skills: "",
     mentorMode: "Remote",
@@ -125,10 +131,21 @@ export default function Home() {
     [volunteers],
   );
 
+  const universityOptions = useMemo(
+    () =>
+      [...new Set(volunteers.map((volunteer) => volunteer.university))]
+        .filter(Boolean)
+        .sort(),
+    [volunteers],
+  );
+
   const filteredVolunteers = useMemo(() => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
 
     return volunteers.filter((volunteer) => {
+      const matchesUniversity =
+        universityFilter === "all" ||
+        volunteer.university === universityFilter;
       const matchesAvailability =
         availabilityFilter === "all" ||
         volunteer.availability === availabilityFilter;
@@ -136,7 +153,7 @@ export default function Home() {
         specialtyFilter === "all" || volunteer.focus.includes(specialtyFilter);
 
       if (!normalizedSearch) {
-        return matchesAvailability && matchesSpecialty;
+        return matchesUniversity && matchesAvailability && matchesSpecialty;
       }
 
       const searchableText = [
@@ -144,6 +161,7 @@ export default function Home() {
         volunteer.pronouns,
         volunteer.city,
         volunteer.bio,
+        volunteer.university,
         volunteer.availability,
         ...volunteer.languages,
         ...volunteer.focus,
@@ -153,9 +171,20 @@ export default function Home() {
 
       const matchesSearch = searchableText.includes(normalizedSearch);
 
-      return matchesAvailability && matchesSpecialty && matchesSearch;
+      return (
+        matchesUniversity &&
+        matchesAvailability &&
+        matchesSpecialty &&
+        matchesSearch
+      );
     });
-  }, [availabilityFilter, searchQuery, specialtyFilter, volunteers]);
+  }, [
+    availabilityFilter,
+    searchQuery,
+    specialtyFilter,
+    universityFilter,
+    volunteers,
+  ]);
 
   const selectedVolunteer = useMemo(
     () => volunteers.find((volunteer) => volunteer.id === selectedVolunteerId),
@@ -254,6 +283,7 @@ export default function Home() {
 
         if (session?.access_token) {
           window.localStorage.setItem("ocgoAccessToken", session.access_token);
+          setIsAuthPortalOpen(true);
           setIsUnlocked(true);
         }
       } catch {
@@ -270,6 +300,7 @@ export default function Home() {
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.access_token) {
         window.localStorage.setItem("ocgoAccessToken", session.access_token);
+        setIsAuthPortalOpen(true);
         setIsUnlocked(true);
       } else {
         window.localStorage.removeItem("ocgoAccessToken");
@@ -364,8 +395,11 @@ export default function Home() {
           role: profile.role ?? "mentee",
           username: profile.username ?? "",
           fullName: profile.full_name ?? "",
+          university:
+            profile.university === "University not selected"
+              ? ""
+              : profile.university ?? "",
           bio: profile.bio ?? "",
-          profilePictureUrl: profile.profile_picture_url ?? "",
           isVisible: Boolean(profile.is_visible),
           skills: (mentorProfile.skills ?? []).join(", "),
           mentorMode: mentorAvailabilityInfo.mentorMode,
@@ -410,8 +444,11 @@ export default function Home() {
       setVolunteerLoadError("");
 
       try {
+        const query = new URLSearchParams({
+          include_other_universities: String(includeOtherUniversities),
+        });
         const response = await apiFetch(
-          `${BACKEND_BASE_URL}/api/matches/mentors/available`,
+          `${BACKEND_BASE_URL}/api/matches/mentors/available?${query}`,
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -457,7 +494,13 @@ export default function Home() {
     }
 
     loadVolunteers();
-  }, [isUnlocked, showMenteeExperience, showMentorDirectory]);
+  }, [
+    includeOtherUniversities,
+    isUnlocked,
+    profileData?.profile?.university,
+    showMenteeExperience,
+    showMentorDirectory,
+  ]);
 
   async function handleSaveProfile() {
     const token = window.localStorage.getItem("ocgoAccessToken");
@@ -470,8 +513,8 @@ export default function Home() {
     const payload = {
       username: profileForm.username.trim(),
       full_name: profileForm.fullName.trim(),
+      university: profileForm.university,
       bio: profileForm.bio.trim(),
-      profile_picture_url: profileForm.profilePictureUrl.trim(),
       is_visible: profileForm.isVisible,
       skills: parseCommaSeparated(profileForm.skills),
       availability: buildMentorAvailability(
@@ -483,6 +526,13 @@ export default function Home() {
     };
     if (!payload.username) {
       delete payload.username;
+    }
+    if (!payload.university && role !== "admin") {
+      setProfileError("Select your Ontario university.");
+      return;
+    }
+    if (role === "admin") {
+      delete payload.university;
     }
 
     if (role !== "mentor") {
@@ -536,8 +586,11 @@ export default function Home() {
         role: updatedProfile.role ?? "mentee",
         username: updatedProfile.username ?? "",
         fullName: updatedProfile.full_name ?? "",
+        university:
+          updatedProfile.university === "University not selected"
+            ? ""
+            : updatedProfile.university ?? "",
         bio: updatedProfile.bio ?? "",
-        profilePictureUrl: updatedProfile.profile_picture_url ?? "",
         isVisible: Boolean(updatedProfile.is_visible),
         skills: (updatedMentor.skills ?? []).join(", "),
         mentorMode: updatedMentorAvailabilityInfo.mentorMode,
@@ -1118,6 +1171,10 @@ export default function Home() {
       setAuthError("Username is required.");
       return;
     }
+    if (authMode === "signup" && !signupUniversity) {
+      setAuthError("Select your Ontario university.");
+      return;
+    }
 
     setIsAuthLoading(true);
     setAuthError("");
@@ -1132,7 +1189,7 @@ export default function Home() {
           emailInput.trim().split("@")[0] ||
           "New User",
         bio: signupBio.trim() || null,
-        profile_picture_url: signupProfilePictureUrl.trim() || null,
+        university: signupUniversity,
       };
 
       if (signupRole === "mentor") {
@@ -1175,7 +1232,7 @@ export default function Home() {
           role: signupRole,
           username: signupUsername.trim(),
           bio: signupBio.trim() || null,
-          profile_picture_url: signupProfilePictureUrl.trim() || null,
+          university: signupUniversity,
         };
 
         if (signupRole === "mentor") {
@@ -1307,14 +1364,15 @@ export default function Home() {
     setEmailInput("");
     setPasswordInput("");
     setIsUnlocked(false);
+    setIsAuthPortalOpen(false);
     setIsAuthLoading(false);
     setAuthError("");
     setAuthSuccess("");
     setSignupRole("mentee");
     setSignupUsername("");
     setSignupFullName("");
+    setSignupUniversity("");
     setSignupBio("");
-    setSignupProfilePictureUrl("");
     setSignupSkills("");
     setSignupMentorMode("Remote");
     setSignupAvailability("");
@@ -1329,8 +1387,10 @@ export default function Home() {
     setIsLoadingMenteeRequests(false);
     setMenteeRequestsError("");
     setSearchQuery("");
+    setUniversityFilter("all");
     setAvailabilityFilter("all");
     setSpecialtyFilter("all");
+    setIncludeOtherUniversities(false);
     setProfileData(null);
     setIsProfileLoading(false);
     setIsProfileSaving(false);
@@ -1382,8 +1442,8 @@ export default function Home() {
       role: "mentee",
       username: "",
       fullName: "",
+      university: "",
       bio: "",
-      profilePictureUrl: "",
       isVisible: false,
       skills: "",
       mentorMode: "Remote",
@@ -1402,50 +1462,84 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-full bg-[#efefef] text-[#2c2455]">
-      <header className="border-b border-[#ded6fb] bg-white">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-4">
+    <div className="min-h-screen bg-[#e8e5dd] text-[#0c0a08]">
+      <header className="sticky top-0 z-40 border-b border-[#d3d1c8] bg-[#e8e5dd]/95 backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 items-center gap-3">
+            <span
+              aria-hidden="true"
+              className="font-display flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#2a3723] text-lg text-[#dcbc98]"
+            >
+              C
+            </span>
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#6d57b8]">
+              <p className="text-[0.7rem] font-bold uppercase tracking-[0.14em] text-[#2a3723]">
                 Peer Support Portal
               </p>
-              <h1 className="text-xl font-extrabold text-[#2c2455]">
+              <p className="max-w-52 text-base font-bold leading-tight text-[#0c0a08] sm:max-w-none sm:text-lg">
                 Caregiver Volunteer Matching
-              </h1>
+              </p>
             </div>
           </div>
+          {!isUnlocked && !isAuthPortalOpen && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("signin");
+                  setIsAuthPortalOpen(true);
+                }}
+                className="px-3 py-2 text-sm font-bold text-[#2a3723]"
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("signup");
+                  setSignupRole("mentee");
+                  setIsAuthPortalOpen(true);
+                }}
+                className="rounded-md bg-[#2a3723] px-4 py-2 text-sm font-bold text-white hover:bg-[#1f2b1b]"
+              >
+                <span className="hidden sm:inline">Create account</span>
+                <span className="sm:hidden">Join</span>
+              </button>
+            </div>
+          )}
+          {!isUnlocked && isAuthPortalOpen && (
+            <button
+              type="button"
+              onClick={() => {
+                setAuthError("");
+                setAuthSuccess("");
+                setIsAuthPortalOpen(false);
+              }}
+              className="text-sm font-bold text-[#2a3723] underline underline-offset-4"
+            >
+              Back to home
+            </button>
+          )}
           {isUnlocked && (
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setIsProfileMenuOpen((current) => !current)}
-                className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-[#d7d2ea] bg-[#f7f4ff] text-sm font-bold text-[#4a3c86]"
+                className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-[#b9bba8] bg-[#f4f2ec] text-sm font-bold text-[#2a3723]"
                 aria-label="Open profile menu"
               >
-                {profileForm.profilePictureUrl ? (
-                  <Image
-                    src={profileForm.profilePictureUrl}
-                    alt="Profile"
-                    width={44}
-                    height={44}
-                    unoptimized
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  userInitial
-                )}
+                {userInitial}
               </button>
 
               {isProfileMenuOpen && (
-                <div className="pop-in absolute right-0 mt-2 w-48 rounded-xl border border-[#e5e0f4] bg-white p-2 shadow-lg">
+                <div className="pop-in absolute right-0 mt-2 w-48 rounded-md border border-[#d3d1c8] bg-white p-2 shadow-lg">
                   <button
                     type="button"
                     onClick={() => {
                       setIsSettingsOpen(true);
                       setIsProfileMenuOpen(false);
                     }}
-                    className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-[#3f346c] hover:bg-[#f7f4ff]"
+                    className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-[#2a3723] hover:bg-[#f4f2ec]"
                   >
                     Settings
                   </button>
@@ -1466,33 +1560,267 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-8">
-        {!isUnlocked && (
-        <section className="rounded-3xl bg-linear-to-r from-[#6d57b8] to-[#8169c9] p-8 text-white shadow-sm">
-          <p className="mb-2 text-sm font-bold uppercase tracking-[0.2em] text-[#efeaff]">
-            Welcome
-          </p>
-          <h2 className="mb-2 text-3xl font-semibold leading-tight">
-            Connect with a peer volunteer who understands caregiving.
-          </h2>
-          <p className="max-w-3xl text-[#efeaff]">
-            match with a peer volunteer who understands caregiving.
-          </p>
-        </section>
+      <main
+        className={
+          !isUnlocked && !isAuthPortalOpen
+            ? "w-full"
+            : "mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8"
+        }
+      >
+        {!isUnlocked && !isAuthPortalOpen && (
+          <>
+            <section className="hero-grain relative overflow-hidden bg-[#141b10]">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute -top-40 right-[-10%] h-136 w-136 rounded-full bg-[#dcbc98]/15 blur-[120px]"
+              />
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute -bottom-48 left-[-12%] h-120 w-120 rounded-full bg-[#3f5233]/40 blur-[120px]"
+              />
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute -right-32 top-1/2 hidden -translate-y-1/2 lg:block"
+              >
+                <div className="h-176 w-176 rounded-full border border-[#e8e5dd]/10" />
+                <div className="absolute inset-16 rounded-full border border-[#e8e5dd]/10" />
+                <div className="absolute inset-32 rounded-full border border-[#dcbc98]/15" />
+              </div>
+
+              <div className="relative mx-auto grid w-full max-w-7xl items-center gap-14 px-6 py-20 sm:py-24 lg:grid-cols-[1.15fr_0.85fr] lg:px-8 lg:py-28">
+                <div className="max-w-2xl">
+                  <p className="fade-up inline-flex items-center gap-2 rounded-full border border-[#e8e5dd]/20 px-4 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-[#dcbc98]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[#dcbc98]" />
+                    Built around shared experience
+                  </p>
+                  <h1 className="fade-up fade-up-1 mt-6 text-5xl font-medium leading-[1.05] text-[#f4f2ec] sm:text-6xl lg:text-7xl">
+                    Care for the people
+                    <br />
+                    who <em className="text-[#dcbc98]">care for others.</em>
+                  </h1>
+                  <p className="fade-up fade-up-2 mt-6 max-w-xl text-lg leading-8 text-[#c9cbbd]">
+                    One-to-one peer support for student caregivers, matched with
+                    trained volunteers who understand the realities of
+                    caregiving at your university.
+                  </p>
+                  <div className="fade-up fade-up-3 mt-9 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("signup");
+                        setSignupRole("mentee");
+                        setIsAuthPortalOpen(true);
+                      }}
+                      className="rounded-full bg-[#dcbc98] px-7 py-3.5 text-sm font-extrabold text-[#141b10] shadow-[0_8px_30px_rgb(220_188_152/25%)] hover:bg-[#e5c9a8]"
+                    >
+                      Find peer support
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("signup");
+                        setSignupRole("mentor");
+                        setIsAuthPortalOpen(true);
+                      }}
+                      className="rounded-full border border-[#e8e5dd]/30 px-7 py-3.5 text-sm font-extrabold text-[#f4f2ec] hover:border-[#e8e5dd]/60 hover:bg-white/5"
+                    >
+                      Volunteer with us
+                    </button>
+                  </div>
+                  <dl className="fade-up fade-up-4 mt-14 grid max-w-xl grid-cols-3 gap-6 border-t border-[#e8e5dd]/15 pt-7">
+                    <div>
+                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8f9583]">
+                        Universities
+                      </dt>
+                      <dd className="font-display mt-1.5 text-2xl text-[#f4f2ec]">
+                        Ontario-wide
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8f9583]">
+                        Matching
+                      </dt>
+                      <dd className="font-display mt-1.5 text-2xl text-[#f4f2ec]">
+                        1-to-1 peers
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8f9583]">
+                        Profiles
+                      </dt>
+                      <dd className="font-display mt-1.5 text-2xl text-[#f4f2ec]">
+                        Admin-reviewed
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <div
+                  aria-hidden="true"
+                  className="fade-up fade-up-3 relative hidden select-none lg:block"
+                >
+                  <div className="-rotate-2 rounded-2xl border border-[#e8e5dd]/15 bg-[#1d2716]/90 p-6 shadow-[0_24px_60px_rgb(0_0_0/35%)] backdrop-blur">
+                    <div className="flex items-center gap-4">
+                      <div className="font-display flex h-14 w-14 items-center justify-center rounded-full bg-[#dcbc98] text-xl text-[#141b10]">
+                        A
+                      </div>
+                      <div>
+                        <p className="text-base font-bold text-[#f4f2ec]">
+                          Aisha, Volunteer
+                        </p>
+                        <p className="text-sm text-[#9aa08d]">
+                          University of Toronto
+                        </p>
+                      </div>
+                      <span className="ml-auto rounded-full bg-[#dfe9db]/10 px-3 py-1 text-xs font-bold text-[#a7c3a0]">
+                        Available
+                      </span>
+                    </div>
+                    <p className="mt-5 text-sm leading-6 text-[#c9cbbd]">
+                      &ldquo;I cared for my grandmother through my undergrad. I
+                      know how heavy it gets, and how much one conversation can
+                      help.&rdquo;
+                    </p>
+                    <div className="mt-5 flex flex-wrap gap-2">
+                      <span className="rounded-full border border-[#e8e5dd]/15 px-3 py-1 text-xs font-semibold text-[#c9cbbd]">
+                        Dementia care
+                      </span>
+                      <span className="rounded-full border border-[#e8e5dd]/15 px-3 py-1 text-xs font-semibold text-[#c9cbbd]">
+                        Remote
+                      </span>
+                      <span className="rounded-full border border-[#e8e5dd]/15 px-3 py-1 text-xs font-semibold text-[#c9cbbd]">
+                        Weekends
+                      </span>
+                    </div>
+                  </div>
+                  <div className="absolute -bottom-8 -left-6 rotate-2 rounded-xl border border-[#e8e5dd]/15 bg-[#f4f2ec] px-5 py-4 shadow-[0_18px_44px_rgb(0_0_0/35%)]">
+                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#59604f]">
+                      Match request
+                    </p>
+                    <p className="mt-1 flex items-center gap-2 text-sm font-bold text-[#0c0a08]">
+                      <span className="h-2 w-2 rounded-full bg-[#2a5a32]" />
+                      Accepted &mdash; first meeting booked
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="bg-[#e8e5dd] px-6 py-20 sm:py-24">
+              <div className="mx-auto w-full max-w-7xl">
+                <div className="max-w-2xl">
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#2a3723]">
+                    Support that starts nearby
+                  </p>
+                  <h2 className="mt-4 text-4xl font-medium text-[#0c0a08] sm:text-5xl">
+                    A thoughtful match,
+                    <br />
+                    with room to choose.
+                  </h2>
+                </div>
+                <div className="mt-12 grid gap-5 md:grid-cols-3">
+                  <div className="hover-lift rounded-2xl border border-[#d3d1c8] bg-white p-8">
+                    <p className="font-display text-5xl text-[#dcbc98]">1</p>
+                    <h3 className="mt-6 text-xl font-bold">
+                      Create your profile
+                    </h3>
+                    <p className="mt-2.5 leading-7 text-[#41473b]">
+                      Share your university, experience, and the kind of
+                      support you are looking for.
+                    </p>
+                  </div>
+                  <div className="hover-lift rounded-2xl border border-[#d3d1c8] bg-white p-8">
+                    <p className="font-display text-5xl text-[#dcbc98]">2</p>
+                    <h3 className="mt-6 text-xl font-bold">
+                      Browse your community
+                    </h3>
+                    <p className="mt-2.5 leading-7 text-[#41473b]">
+                      Start with available volunteers at your university, then
+                      broaden the search when you choose.
+                    </p>
+                  </div>
+                  <div className="hover-lift rounded-2xl border border-[#d3d1c8] bg-white p-8">
+                    <p className="font-display text-5xl text-[#dcbc98]">3</p>
+                    <h3 className="mt-6 text-xl font-bold">
+                      Connect with confidence
+                    </h3>
+                    <p className="mt-2.5 leading-7 text-[#41473b]">
+                      Send one clear request and follow its status from pending
+                      to an active match.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="px-6 pb-20 sm:pb-24">
+              <div className="mx-auto w-full max-w-7xl overflow-hidden rounded-3xl bg-[#2a3723] px-8 py-16 text-center sm:px-12 sm:py-20">
+                <h2 className="mx-auto max-w-2xl text-3xl font-medium text-[#f4f2ec] sm:text-4xl">
+                  You don&rsquo;t have to carry it alone.
+                </h2>
+                <p className="mx-auto mt-4 max-w-xl leading-7 text-[#c9cbbd]">
+                  Join a community of caregivers and volunteers who get it.
+                  Creating a profile takes a few minutes.
+                </p>
+                <div className="mt-8 flex flex-wrap justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode("signup");
+                      setSignupRole("mentee");
+                      setIsAuthPortalOpen(true);
+                    }}
+                    className="rounded-full bg-[#dcbc98] px-7 py-3.5 text-sm font-extrabold text-[#141b10] hover:bg-[#e5c9a8]"
+                  >
+                    Create your account
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode("signin");
+                      setIsAuthPortalOpen(true);
+                    }}
+                    className="rounded-full border border-[#e8e5dd]/30 px-7 py-3.5 text-sm font-extrabold text-[#f4f2ec] hover:bg-white/5"
+                  >
+                    Sign in
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <footer className="border-t border-[#d3d1c8] px-6 py-10">
+              <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-4">
+                <p className="font-display text-lg text-[#0c0a08]">
+                  Caregiver Volunteer Matching
+                </p>
+                <p className="text-sm text-[#59604f]">
+                  Peer support for university caregivers across Ontario.
+                </p>
+              </div>
+            </footer>
+          </>
         )}
 
-        {!isUnlocked && (
-          <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
-            <h3 className="text-xl font-bold text-[#2c2455]">
-              Sign in to continue
-            </h3>
+        {!isUnlocked && isAuthPortalOpen && (
+          <section className="mx-auto w-full max-w-3xl rounded-lg border border-[#d3d1c8] bg-white p-6 shadow-sm sm:p-8">
+            <p className="text-xs font-bold uppercase text-[#2a3723]">
+              Peer Support Portal
+            </p>
+            <h1 className="mt-2 text-4xl font-medium text-[#0c0a08]">
+              {authMode === "signup" ? "Create your account" : "Welcome back"}
+            </h1>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-[#59604f]">
+              {authMode === "signup"
+                ? "Tell us who you are and your university. An administrator will review your profile before portal access is unlocked."
+                : "Sign in to manage your profile, requests, matches, and volunteer hours."}
+            </p>
             <form
-              className="mt-5 flex flex-col gap-3 sm:max-w-md"
+              className="mt-7 flex flex-col gap-3 sm:max-w-xl"
               onSubmit={handleUnlock}
             >
               <label
                 htmlFor="portal-email"
-                className="text-sm font-bold text-[#3f346c]"
+                className="text-sm font-bold text-[#2a3723]"
               >
                 Email
               </label>
@@ -1502,11 +1830,11 @@ export default function Home() {
                 value={emailInput}
                 onChange={(event) => setEmailInput(event.target.value)}
                 placeholder="you@example.com"
-                className="rounded-xl border border-[#d7d2ea] px-4 py-3 outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                className="rounded-md border border-[#b9bba8] px-4 py-3 outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
               />
               <label
                 htmlFor="portal-password"
-                className="text-sm font-bold text-[#3f346c]"
+                className="text-sm font-bold text-[#2a3723]"
               >
                 Password
               </label>
@@ -1516,7 +1844,7 @@ export default function Home() {
                 value={passwordInput}
                 onChange={(event) => setPasswordInput(event.target.value)}
                 placeholder="Enter password"
-                className="rounded-xl border border-[#d7d2ea] px-4 py-3 outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                className="rounded-md border border-[#b9bba8] px-4 py-3 outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
               />
               {authError && (
                 <p className="text-sm font-medium text-red-700">{authError}</p>
@@ -1531,7 +1859,7 @@ export default function Home() {
                 <>
                   <label
                     htmlFor="signup-role"
-                    className="text-sm font-bold text-[#3f346c]"
+                    className="text-sm font-bold text-[#2a3723]"
                   >
                     I am signing up as
                   </label>
@@ -1539,7 +1867,7 @@ export default function Home() {
                     id="signup-role"
                     value={signupRole}
                     onChange={(event) => setSignupRole(event.target.value)}
-                    className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                    className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                   >
                     <option value="mentee">Caregiver</option>
                     <option value="mentor">Volunteer</option>
@@ -1547,7 +1875,7 @@ export default function Home() {
 
                   <label
                     htmlFor="signup-username"
-                    className="text-sm font-bold text-[#3f346c]"
+                    className="text-sm font-bold text-[#2a3723]"
                   >
                     Username
                   </label>
@@ -1561,12 +1889,12 @@ export default function Home() {
                     maxLength={30}
                     pattern="[A-Za-z0-9_]+"
                     required
-                    className="rounded-xl border border-[#d7d2ea] px-4 py-3 outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                    className="rounded-md border border-[#b9bba8] px-4 py-3 outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                   />
 
                   <label
                     htmlFor="signup-full-name"
-                    className="text-sm font-bold text-[#3f346c]"
+                    className="text-sm font-bold text-[#2a3723]"
                   >
                     Full name
                   </label>
@@ -1576,29 +1904,33 @@ export default function Home() {
                     value={signupFullName}
                     onChange={(event) => setSignupFullName(event.target.value)}
                     placeholder="Your full name"
-                    className="rounded-xl border border-[#d7d2ea] px-4 py-3 outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                    className="rounded-md border border-[#b9bba8] px-4 py-3 outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                   />
 
                   <label
-                    htmlFor="signup-pfp"
-                    className="text-sm font-bold text-[#3f346c]"
+                    htmlFor="signup-university"
+                    className="text-sm font-bold text-[#2a3723]"
                   >
-                    Profile picture URL
+                    Ontario university
                   </label>
-                  <input
-                    id="signup-pfp"
-                    type="url"
-                    value={signupProfilePictureUrl}
-                    onChange={(event) =>
-                      setSignupProfilePictureUrl(event.target.value)
-                    }
-                    placeholder="https://..."
-                    className="rounded-xl border border-[#d7d2ea] px-4 py-3 outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
-                  />
+                  <select
+                    id="signup-university"
+                    value={signupUniversity}
+                    onChange={(event) => setSignupUniversity(event.target.value)}
+                    required
+                    className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
+                  >
+                    <option value="">Select your university</option>
+                    {ONTARIO_UNIVERSITIES.map((university) => (
+                      <option key={university} value={university}>
+                        {university}
+                      </option>
+                    ))}
+                  </select>
 
                   <label
                     htmlFor="signup-bio"
-                    className="text-sm font-bold text-[#3f346c]"
+                    className="text-sm font-bold text-[#2a3723]"
                   >
                     Short bio
                   </label>
@@ -1608,14 +1940,14 @@ export default function Home() {
                     onChange={(event) => setSignupBio(event.target.value)}
                     rows={3}
                     placeholder="Tell us about yourself..."
-                    className="resize-y rounded-xl border border-[#d7d2ea] px-4 py-3 outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                    className="resize-y rounded-md border border-[#b9bba8] px-4 py-3 outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                   />
 
                   {signupRole === "mentor" && (
                     <>
                       <label
                         htmlFor="signup-skills"
-                        className="text-sm font-bold text-[#3f346c]"
+                        className="text-sm font-bold text-[#2a3723]"
                       >
                         Skills (comma-separated)
                       </label>
@@ -1627,11 +1959,11 @@ export default function Home() {
                           setSignupSkills(event.target.value)
                         }
                         placeholder="Dementia support, Care navigation"
-                        className="rounded-xl border border-[#d7d2ea] px-4 py-3 outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       />
                       <label
                         htmlFor="signup-mentor-mode"
-                        className="text-sm font-bold text-[#3f346c]"
+                        className="text-sm font-bold text-[#2a3723]"
                       >
                         Support format
                       </label>
@@ -1641,14 +1973,14 @@ export default function Home() {
                         onChange={(event) =>
                           setSignupMentorMode(event.target.value)
                         }
-                        className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       >
                         <option value="Remote">Remote</option>
                         <option value="In person">In person</option>
                       </select>
                       <label
                         htmlFor="signup-availability"
-                        className="text-sm font-bold text-[#3f346c]"
+                        className="text-sm font-bold text-[#2a3723]"
                       >
                         Availability
                       </label>
@@ -1660,7 +1992,7 @@ export default function Home() {
                           setSignupAvailability(event.target.value)
                         }
                         placeholder="Weekday evenings"
-                        className="rounded-xl border border-[#d7d2ea] px-4 py-3 outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       />
                     </>
                   )}
@@ -1669,7 +2001,7 @@ export default function Home() {
                     <>
                       <label
                         htmlFor="signup-goals"
-                        className="text-sm font-bold text-[#3f346c]"
+                        className="text-sm font-bold text-[#2a3723]"
                       >
                         Goals
                       </label>
@@ -1679,11 +2011,11 @@ export default function Home() {
                         onChange={(event) => setSignupGoals(event.target.value)}
                         rows={2}
                         placeholder="What support are you looking for?"
-                        className="resize-y rounded-xl border border-[#d7d2ea] px-4 py-3 outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                        className="resize-y rounded-md border border-[#b9bba8] px-4 py-3 outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       />
                       <label
                         htmlFor="signup-interests"
-                        className="text-sm font-bold text-[#3f346c]"
+                        className="text-sm font-bold text-[#2a3723]"
                       >
                         Interests (comma-separated)
                       </label>
@@ -1695,7 +2027,7 @@ export default function Home() {
                           setSignupInterests(event.target.value)
                         }
                         placeholder="Burnout prevention, Hospital navigation"
-                        className="rounded-xl border border-[#d7d2ea] px-4 py-3 outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       />
                     </>
                   )}
@@ -1704,7 +2036,7 @@ export default function Home() {
               <button
                 type="submit"
                 disabled={isAuthLoading}
-                className="mt-2 inline-flex w-fit items-center rounded-full bg-[#7a63b7] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#654ea5]"
+                className="mt-2 inline-flex w-fit items-center rounded-md bg-[#2a3723] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#1f2b1b]"
               >
                 {isAuthLoading
                   ? "Please wait..."
@@ -1721,7 +2053,7 @@ export default function Home() {
                     return currentMode === "signup" ? "signin" : "signup";
                   })
                 }
-                className="w-fit text-sm font-semibold text-[#6d57b8] underline"
+                className="w-fit text-sm font-semibold text-[#2a3723] underline"
               >
                 {authMode === "signup"
                   ? "Already have an account? Sign in"
@@ -1734,7 +2066,7 @@ export default function Home() {
         {isUnlocked && !isMatchSent && (
           <>
             {!isProfileLoading && profileError && (
-              <section className="rounded-3xl border border-red-200 bg-red-50 p-6 shadow-sm">
+              <section className="rounded-lg border border-red-200 bg-red-50 p-6 shadow-sm">
                 <h3 className="text-lg font-bold text-red-900">
                   Could not load account profile
                 </h3>
@@ -1746,7 +2078,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={handleStartOver}
-                  className="mt-4 rounded-full bg-red-700 px-5 py-2 text-sm font-bold text-white hover:bg-red-800"
+                  className="mt-4 rounded-md bg-red-700 px-5 py-2 text-sm font-bold text-white hover:bg-red-800"
                 >
                   Sign out and try again
                 </button>
@@ -1754,42 +2086,64 @@ export default function Home() {
             )}
 
             {!isProfileLoading && !profileError && isAwaitingApproval && (
-              <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
-                <p className="text-sm font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
+              <section className="rounded-lg border border-[#b9bba8] bg-white p-6 shadow-sm">
+                <p className="text-sm font-bold uppercase tracking-[0.08em] text-[#2a3723]">
                   Account pending
                 </p>
-                <h3 className="mt-2 text-2xl font-bold text-[#2c2455]">
+                <h3 className="mt-2 text-2xl font-bold text-[#0c0a08]">
                   Your {userRole === "mentor" ? "volunteer" : "caregiver"} profile is waiting for admin approval.
                 </h3>
-                <p className="mt-2 max-w-2xl text-sm text-[#5c5385]">
-                  You can update your bio and profile picture from Settings,
+                <p className="mt-2 max-w-2xl text-sm text-[#59604f]">
+                  You can update your profile and university from Settings,
                   but matching, requests, and volunteer-hour tools stay
                   locked until an admin approves this account.
                 </p>
               </section>
             )}
 
+            {!isProfileLoading &&
+              !profileError &&
+              !isAdmin &&
+              !profileForm.university && (
+                <section className="rounded-lg border border-[#e6c766] bg-[#fffbea] p-6 shadow-sm">
+                  <h3 className="text-xl font-bold text-[#59470a]">
+                    Select your university
+                  </h3>
+                  <p className="mt-2 text-sm text-[#6f5a14]">
+                    Add your Ontario university before your profile can be
+                    approved or you can browse volunteers.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setIsSettingsOpen(true)}
+                    className="mt-4 rounded-md bg-[#59470a] px-5 py-2 text-sm font-bold text-white hover:bg-[#443605]"
+                  >
+                    Open settings
+                  </button>
+                </section>
+              )}
+
             {!isProfileLoading && !profileError && isApprovedMentor && (
               <nav className="workspace-tabs" aria-label="Volunteer workspace">
-                <div className="inline-flex rounded-full bg-[#f0ecff] p-1">
+                <div className="inline-flex p-1">
                   <button
                     type="button"
                     onClick={() => setMentorViewMode("directory")}
-                    className={`rounded-full px-4 py-2 text-xs font-extrabold uppercase tracking-[0.08em] ${
+                    className={`rounded-md px-4 py-2 text-sm font-semibold ${
                       mentorViewMode === "directory"
-                        ? "bg-white text-[#4a3c86]"
-                        : "text-[#4a3c86] hover:bg-white/60"
+                        ? "bg-[#2a3723] text-white shadow-sm"
+                        : "text-[#2a3723] hover:bg-white/60"
                     }`}
                   >
-                    All volunteers
+                    Volunteer directory
                   </button>
                   <button
                     type="button"
                     onClick={() => setMentorViewMode("requests")}
-                    className={`rounded-full px-4 py-2 text-xs font-extrabold uppercase tracking-[0.08em] ${
+                    className={`rounded-md px-4 py-2 text-sm font-semibold ${
                       mentorViewMode === "requests"
-                        ? "bg-white text-[#4a3c86]"
-                        : "text-[#4a3c86] hover:bg-white/60"
+                        ? "bg-[#2a3723] text-white shadow-sm"
+                        : "text-[#2a3723] hover:bg-white/60"
                     }`}
                   >
                     Caregiver requests
@@ -1797,10 +2151,10 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={() => setMentorViewMode("mentees")}
-                    className={`rounded-full px-4 py-2 text-xs font-extrabold uppercase tracking-[0.08em] ${
+                    className={`rounded-md px-4 py-2 text-sm font-semibold ${
                       mentorViewMode === "mentees"
-                        ? "bg-white text-[#4a3c86]"
-                        : "text-[#4a3c86] hover:bg-white/60"
+                        ? "bg-[#2a3723] text-white shadow-sm"
+                        : "text-[#2a3723] hover:bg-white/60"
                     }`}
                   >
                     My caregivers
@@ -1810,15 +2164,15 @@ export default function Home() {
             )}
 
             {!isProfileLoading && !profileError && showMentorRequests && (
-              <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
+              <section className="portal-section">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="workspace-heading text-2xl font-bold text-[#2c2455]">
+                  <h3 className="workspace-heading text-2xl font-bold text-[#0c0a08]">
                     Caregiver requests
                   </h3>
                 </div>
 
                 {isLoadingMentorRequests && (
-                  <p className="mt-4 text-sm text-[#5c5385]">
+                  <p className="mt-4 text-sm text-[#59604f]">
                     Loading requests...
                   </p>
                 )}
@@ -1838,22 +2192,22 @@ export default function Home() {
                   </p>
                 )}
                 {!isLoadingMentorRequests && mentorRequests.length === 0 && (
-                  <article className="mt-4 rounded-2xl border border-dashed border-[#d7d2ea] bg-white p-4">
-                    <p className="text-sm text-[#5c5385]">No requests yet.</p>
+                  <article className="mt-4 rounded-lg border border-dashed border-[#b9bba8] bg-white p-4">
+                    <p className="text-sm text-[#59604f]">No requests yet.</p>
                   </article>
                 )}
                 <div className="mt-4 space-y-3">
                   {mentorRequests.map((request) => (
                     <article
                       key={request.id}
-                      className="request-record rounded-2xl border border-[#e5e0f4] bg-white"
+                      className="request-record rounded-lg border border-[#d3d1c8] bg-white"
                     >
-                      <header className="request-record-header flex flex-wrap items-start justify-between gap-4 border-b border-[#e5e0f4] px-6 py-5">
+                      <header className="request-record-header flex flex-wrap items-start justify-between gap-4 border-b border-[#d3d1c8] px-6 py-5">
                         <div>
-                          <p className="text-xl font-extrabold text-[#2c2455]">
+                          <p className="text-xl font-extrabold text-[#0c0a08]">
                             {request.mentee_profile?.full_name || "Unnamed caregiver"}
                           </p>
-                          <p className="mt-1 text-sm text-[#5c5385]">
+                          <p className="mt-1 text-sm text-[#59604f]">
                             Submitted {new Date(request.created_at).toLocaleString()}
                           </p>
                         </div>
@@ -1863,30 +2217,35 @@ export default function Home() {
                       </header>
 
                       <div className="grid gap-0 md:grid-cols-[minmax(0,1.4fr)_minmax(240px,0.8fr)]">
-                        <div className="px-6 py-6 md:border-r md:border-[#e5e0f4]">
+                        <div className="px-6 py-6 md:border-r md:border-[#d3d1c8]">
                           <p className="request-label">Support requested</p>
-                          <p className="mt-2 text-lg font-bold leading-7 text-[#2c2455]">
+                          <p className="mt-2 text-lg font-bold leading-7 text-[#0c0a08]">
                             {request.care_type || "Not specified"}
                           </p>
 
                           <p className="request-label mt-7">About the caregiver</p>
-                          <p className="mt-2 max-w-3xl text-base leading-7 text-[#4f4578]">
+                          <p className="mt-2 text-sm font-semibold text-[#2a3723]">
+                            {formatUniversity(
+                              request.mentee_profile?.university,
+                            )}
+                          </p>
+                          <p className="mt-2 max-w-3xl text-base leading-7 text-[#41473b]">
                             {request.mentee_profile?.bio || "No bio provided."}
                           </p>
                         </div>
 
-                        <aside className="bg-[#faf8ff] px-6 py-6">
+                        <aside className="bg-[#f5f3ed] px-6 py-6">
                           <p className="request-label">Contact</p>
-                          <p className="mt-2 break-all text-base font-semibold text-[#2c2455]">
+                          <p className="mt-2 break-all text-base font-semibold text-[#0c0a08]">
                             {request.mentee_email || "No email available"}
                           </p>
-                          <p className="mt-2 text-sm leading-6 text-[#5c5385]">
+                          <p className="mt-2 text-sm leading-6 text-[#59604f]">
                             Contact details are available after approval for arranging the first meeting.
                           </p>
                         </aside>
                       </div>
 
-                      <footer className="flex flex-wrap items-center gap-3 border-t border-[#e5e0f4] px-6 py-5">
+                      <footer className="flex flex-wrap items-center gap-3 border-t border-[#d3d1c8] px-6 py-5">
                         {request.status === "pending" ? (
                           <>
                                 <button
@@ -1895,7 +2254,7 @@ export default function Home() {
                                     handleMentorDecision(request.id, "accept")
                                   }
                                   disabled={mentorDecisionLoadingId === request.id}
-                                  className="rounded-full bg-[#2c2455] px-4 py-2 text-xs font-bold uppercase tracking-[0.08em] text-white transition enabled:hover:bg-[#201943] disabled:cursor-not-allowed disabled:bg-slate-300"
+                                  className="rounded-md bg-[#0c0a08] px-4 py-2 text-xs font-bold uppercase tracking-[0.08em] text-white transition enabled:hover:bg-[#1f2b1b] disabled:cursor-not-allowed disabled:bg-slate-300"
                                 >
                                   {mentorDecisionLoadingId === request.id
                                     ? "Saving..."
@@ -1907,7 +2266,7 @@ export default function Home() {
                                     handleMentorDecision(request.id, "reject")
                                   }
                                   disabled={mentorDecisionLoadingId === request.id}
-                                  className="rounded-full bg-[#fff2f2] px-4 py-2 text-xs font-bold uppercase tracking-[0.08em] text-[#9b2c2c] transition enabled:hover:bg-[#ffe3e3] disabled:cursor-not-allowed disabled:bg-slate-200"
+                                  className="rounded-md bg-[#fff2f2] px-4 py-2 text-xs font-bold uppercase tracking-[0.08em] text-[#9b2c2c] transition enabled:hover:bg-[#ffe3e3] disabled:cursor-not-allowed disabled:bg-slate-200"
                                 >
                                   Decline request
                                 </button>
@@ -1917,7 +2276,7 @@ export default function Home() {
                             This caregiver is an active match.
                           </p>
                         ) : (
-                          <p className="text-sm font-semibold text-[#5c5385]">
+                          <p className="text-sm font-semibold text-[#59604f]">
                             This request is closed.
                           </p>
                         )}
@@ -1930,23 +2289,23 @@ export default function Home() {
             )}
 
             {!isProfileLoading && !profileError && showMentorMentees && (
-              <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
+              <section className="portal-section">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="workspace-heading text-2xl font-bold text-[#2c2455]">
+                  <h3 className="workspace-heading text-2xl font-bold text-[#0c0a08]">
                     My caregivers
                   </h3>
                 </div>
 
-                <section className="mt-4 rounded-2xl border border-[#e5e0f4] bg-[#faf8ff] p-4">
-                  <h4 className="text-base font-bold text-[#2c2455]">
+                <section className="mt-5 border-t border-[#d3d1c8] pt-5">
+                  <h4 className="text-base font-bold text-[#0c0a08]">
                     Active caregiver connections
                   </h4>
-                  <p className="mt-1 text-sm text-[#5c5385]">
+                  <p className="mt-1 text-sm text-[#59604f]">
                     After accepting a request, use this roster for contact and
                     volunteer-hour logging.
                   </p>
                   {activeMenteeConnections.length === 0 ? (
-                    <p className="mt-3 text-sm text-[#5c5385]">
+                    <p className="mt-3 text-sm text-[#59604f]">
                       No active caregiver connections yet.
                     </p>
                   ) : (
@@ -1954,15 +2313,21 @@ export default function Home() {
                       {activeMenteeConnections.map((request) => (
                         <article
                           key={`active-${request.id}`}
-                          className="rounded-xl border border-[#e5e0f4] bg-white p-3 text-sm text-[#4f4578]"
+                          className="border-b border-[#d3d1c8] py-4 text-sm text-[#41473b] last:border-b-0"
                         >
-                          <p className="font-bold text-[#2c2455]">
+                          <p className="font-bold text-[#0c0a08]">
                             {request.mentee_profile?.full_name ||
                               "Unnamed caregiver"}
                           </p>
                           <p>
                             <span className="font-bold">Email:</span>{" "}
                             {request.mentee_email || "No email available"}
+                          </p>
+                          <p>
+                            <span className="font-bold">University:</span>{" "}
+                            {formatUniversity(
+                              request.mentee_profile?.university,
+                            )}
                           </p>
                           <p>
                             <span className="font-bold">Match ID:</span>{" "}
@@ -1974,15 +2339,15 @@ export default function Home() {
                   )}
                 </section>
 
-                <section className="mt-6 rounded-2xl border border-[#e5e0f4] bg-[#faf8ff] p-4">
-                  <h4 className="text-base font-bold text-[#2c2455]">
+                <section className="mt-8 border-t border-[#d3d1c8] pt-6">
+                  <h4 className="text-base font-bold text-[#0c0a08]">
                     Volunteer hours and meetings
                   </h4>
-                  <p className="mt-1 text-sm text-[#5c5385]">
+                  <p className="mt-1 text-sm text-[#59604f]">
                     Log each session with date, hours, next meeting, and topics
                     discussed.
                   </p>
-                  <p className="mt-2 text-sm font-bold text-[#4a3c86]">
+                  <p className="mt-2 text-sm font-bold text-[#2a3723]">
                     Total logged hours: {mentorHoursTotal}
                   </p>
                   {mentorHoursError && (
@@ -2003,7 +2368,7 @@ export default function Home() {
                     <div className="flex flex-col gap-2">
                       <label
                         htmlFor="mentor-hours-match"
-                        className="text-sm font-bold text-[#3f346c]"
+                        className="text-sm font-bold text-[#2a3723]"
                       >
                         Active caregiver
                       </label>
@@ -2016,7 +2381,7 @@ export default function Home() {
                             matchId: event.target.value,
                           }))
                         }
-                        className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       >
                         <option value="">Select active match</option>
                         {activeMenteeConnections.map((request) => (
@@ -2030,7 +2395,7 @@ export default function Home() {
                     <div className="flex flex-col gap-2">
                       <label
                         htmlFor="mentor-hours-date"
-                        className="text-sm font-bold text-[#3f346c]"
+                        className="text-sm font-bold text-[#2a3723]"
                       >
                         Meeting date
                       </label>
@@ -2044,13 +2409,13 @@ export default function Home() {
                             meetingDate: event.target.value,
                           }))
                         }
-                        className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       />
                     </div>
                     <div className="flex flex-col gap-2">
                       <label
                         htmlFor="mentor-hours-hours"
-                        className="text-sm font-bold text-[#3f346c]"
+                        className="text-sm font-bold text-[#2a3723]"
                       >
                         Hours
                       </label>
@@ -2067,13 +2432,13 @@ export default function Home() {
                           }))
                         }
                         placeholder="1.5"
-                        className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       />
                     </div>
                     <div className="flex flex-col gap-2">
                       <label
                         htmlFor="mentor-hours-next-meeting"
-                        className="text-sm font-bold text-[#3f346c]"
+                        className="text-sm font-bold text-[#2a3723]"
                       >
                         Next meeting
                       </label>
@@ -2087,13 +2452,13 @@ export default function Home() {
                             nextMeeting: event.target.value,
                           }))
                         }
-                        className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       />
                     </div>
                     <div className="md:col-span-2 flex flex-col gap-2">
                       <label
                         htmlFor="mentor-hours-topics"
-                        className="text-sm font-bold text-[#3f346c]"
+                        className="text-sm font-bold text-[#2a3723]"
                       >
                         Topics discussed
                       </label>
@@ -2108,13 +2473,13 @@ export default function Home() {
                           }))
                         }
                         placeholder="Discussed caregiving stress and planned weekly check-ins."
-                        className="resize-y rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                        className="resize-y rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       />
                     </div>
                     <div className="md:col-span-2 flex flex-col gap-2">
                       <label
                         htmlFor="mentor-hours-flags"
-                        className="text-sm font-bold text-[#3f346c]"
+                        className="text-sm font-bold text-[#2a3723]"
                       >
                         Anything to flag
                       </label>
@@ -2129,7 +2494,7 @@ export default function Home() {
                           }))
                         }
                         placeholder="Optional concerns or follow-up items for the admin."
-                        className="resize-y rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                        className="resize-y rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       />
                     </div>
                     <div className="md:col-span-2">
@@ -2138,7 +2503,7 @@ export default function Home() {
                         disabled={
                           isMentorHoursSaving || activeMenteeConnections.length === 0
                         }
-                        className="rounded-full bg-[#2c2455] px-5 py-3 text-sm font-bold text-white transition enabled:hover:bg-[#201943] disabled:cursor-not-allowed disabled:bg-slate-300"
+                        className="rounded-md bg-[#0c0a08] px-5 py-3 text-sm font-bold text-white transition enabled:hover:bg-[#1f2b1b] disabled:cursor-not-allowed disabled:bg-slate-300"
                       >
                         {isMentorHoursSaving ? "Saving..." : "Log volunteer hours"}
                       </button>
@@ -2146,11 +2511,11 @@ export default function Home() {
                   </form>
 
                   {isMentorHoursLoading ? (
-                    <p className="mt-3 text-sm text-[#5c5385]">
+                    <p className="mt-3 text-sm text-[#59604f]">
                       Loading volunteer logs...
                     </p>
                   ) : mentorHoursEntries.length === 0 ? (
-                    <p className="mt-3 text-sm text-[#5c5385]">
+                    <p className="mt-3 text-sm text-[#59604f]">
                       No volunteer sessions logged yet.
                     </p>
                   ) : (
@@ -2158,9 +2523,9 @@ export default function Home() {
                       {mentorHoursEntries.slice(0, 5).map((entry) => (
                         <article
                           key={`hour-entry-${entry.id}`}
-                          className="rounded-xl border border-[#e5e0f4] bg-white p-3 text-sm text-[#4f4578]"
+                          className="border-b border-[#d3d1c8] py-4 text-sm text-[#41473b] last:border-b-0"
                         >
-                          <p className="font-bold text-[#2c2455]">
+                          <p className="font-bold text-[#0c0a08]">
                             {new Date(entry.meeting_date).toLocaleDateString()} -{" "}
                             {entry.hours} hours
                           </p>
@@ -2193,21 +2558,21 @@ export default function Home() {
               !isAdmin &&
               !isMentee &&
               !isMentor && (
-                <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
-                  <h3 className="text-2xl font-bold text-[#2c2455]">
+                <section className="rounded-lg border border-[#b9bba8] bg-white p-6 shadow-sm">
+                  <h3 className="text-2xl font-bold text-[#0c0a08]">
                     Account loaded
                   </h3>
-                  <p className="mt-2 text-sm text-[#5c5385]">
+                  <p className="mt-2 text-sm text-[#59604f]">
                     We could not determine a supported role for this account
                     yet.
                   </p>
-                  <p className="mt-2 text-sm text-[#5c5385]">
+                  <p className="mt-2 text-sm text-[#59604f]">
                     Current role:{" "}
                     <span className="font-bold">
                       {userRole || "unassigned"}
                     </span>
                   </p>
-                  <p className="mt-1 text-sm text-[#5c5385]">
+                  <p className="mt-1 text-sm text-[#59604f]">
                     Approval status:{" "}
                     <span className="font-bold">
                       {profileData?.profile?.approval_status ?? "unknown"}
@@ -2218,14 +2583,14 @@ export default function Home() {
 
             {isAdmin && (
               <nav className="workspace-tabs" aria-label="Admin workspace">
-                <div className="inline-flex rounded-full bg-[#f0ecff] p-1">
+                <div className="inline-flex p-1">
                   <button
                     type="button"
                     onClick={() => setAdminViewMode("admin")}
-                    className={`rounded-full px-4 py-2 text-sm font-bold ${
+                    className={`rounded-md px-4 py-2 text-sm font-bold ${
                       adminViewMode === "admin"
-                        ? "bg-white text-[#4a3c86] shadow-sm"
-                        : "text-[#4a3c86] hover:bg-white/60"
+                        ? "bg-[#2a3723] text-white shadow-sm"
+                        : "text-[#2a3723] hover:bg-white/60"
                     }`}
                   >
                     Dashboard
@@ -2233,10 +2598,10 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={() => setAdminViewMode("mentee")}
-                    className={`rounded-full px-4 py-2 text-sm font-bold ${
+                    className={`rounded-md px-4 py-2 text-sm font-bold ${
                       adminViewMode === "mentee"
-                        ? "bg-white text-[#4a3c86] shadow-sm"
-                        : "text-[#4a3c86] hover:bg-white/60"
+                        ? "bg-[#2a3723] text-white shadow-sm"
+                        : "text-[#2a3723] hover:bg-white/60"
                     }`}
                   >
                     Caregiver experience
@@ -2246,20 +2611,20 @@ export default function Home() {
             )}
 
             {showAdminDashboard && (
-              <section className="admin-dashboard rounded-3xl border border-[#ded6fb] bg-white p-8 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#e5e0f4] pb-7">
+              <section className="admin-dashboard">
+                <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#d3d1c8] pb-7">
                   <div>
-                    <h3 className="workspace-heading text-2xl font-bold text-[#2c2455]">
+                    <h3 className="workspace-heading text-2xl font-bold text-[#0c0a08]">
                       Admin dashboard
                     </h3>
-                    <p className="mt-1 text-sm text-[#5c5385]">
+                    <p className="mt-1 text-sm text-[#59604f]">
                       Review applications and monitor active support.
                     </p>
                   </div>
                 </div>
 
                 {isAdminLoading && (
-                  <p className="mt-4 text-sm text-[#5c5385]">
+                  <p className="mt-4 text-sm text-[#59604f]">
                     Loading admin dashboard...
                   </p>
                 )}
@@ -2276,59 +2641,59 @@ export default function Home() {
 
                 {adminMetrics && (
                   <div className="admin-metrics mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <article className="rounded-2xl border border-[#e5e0f4] bg-[#f7f4ff] p-5">
-                      <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
+                    <article className="rounded-lg border border-[#d3d1c8] bg-white p-5 shadow-sm">
+                      <p className="text-xs font-semibold text-[#59604f]">
                         Active volunteers
                       </p>
-                      <p className="mt-3 text-4xl font-extrabold text-[#2c2455]">
+                      <p className="mt-2 text-3xl font-bold text-[#0c0a08]">
                         {adminMetrics.active_mentors}
                       </p>
                     </article>
-                    <article className="rounded-2xl border border-[#e5e0f4] bg-[#f7f4ff] p-5">
-                      <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
+                    <article className="rounded-lg border border-[#d3d1c8] bg-[#f0f1eb] p-5 shadow-sm">
+                      <p className="text-xs font-semibold text-[#59604f]">
                         Active caregivers
                       </p>
-                      <p className="mt-3 text-4xl font-extrabold text-[#2c2455]">
+                      <p className="mt-2 text-3xl font-bold text-[#0c0a08]">
                         {adminMetrics.active_mentees}
                       </p>
                     </article>
-                    <article className="rounded-2xl border border-[#e5e0f4] bg-[#f7f4ff] p-5">
-                      <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
+                    <article className="rounded-lg border border-[#d3d1c8] bg-[#f5ecdf] p-5 shadow-sm">
+                      <p className="text-xs font-semibold text-[#59604f]">
                         Current matches
                       </p>
-                      <p className="mt-3 text-4xl font-extrabold text-[#2c2455]">
+                      <p className="mt-2 text-3xl font-bold text-[#0c0a08]">
                         {adminMetrics.current_matches}
                       </p>
                     </article>
-                    <article className="rounded-2xl border border-[#e5e0f4] bg-[#f7f4ff] p-5">
-                      <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
+                    <article className="rounded-lg border border-[#d3d1c8] bg-[#e7eadf] p-5 shadow-sm">
+                      <p className="text-xs font-semibold text-[#59604f]">
                         Volunteer hours
                       </p>
-                      <p className="mt-3 text-4xl font-extrabold text-[#2c2455]">
+                      <p className="mt-2 text-3xl font-bold text-[#0c0a08]">
                         {adminMetrics.volunteer_hours_total}
                       </p>
                     </article>
                   </div>
                 )}
 
-                <section className="admin-section mt-10 border-t border-[#e5e0f4] pt-9">
+                <section className="admin-section mt-10 border-t border-[#d3d1c8] pt-9">
                   <div className="flex flex-wrap items-end justify-between gap-4">
                     <div>
-                      <h4 className="text-2xl font-extrabold text-[#2c2455]">
+                      <h4 className="text-2xl font-extrabold text-[#0c0a08]">
                         All matches
                       </h4>
-                      <p className="mt-2 text-base text-[#5c5385]">
+                      <p className="mt-2 text-base text-[#59604f]">
                         Every volunteer and caregiver match, including pending and closed requests.
                       </p>
                     </div>
-                    <label className="flex items-center gap-3 text-sm font-bold text-[#3f346c]">
+                    <label className="flex items-center gap-3 text-sm font-bold text-[#2a3723]">
                       Status
                       <select
                         value={adminMatchStatusFilter}
                         onChange={(event) =>
                           setAdminMatchStatusFilter(event.target.value)
                         }
-                        className="rounded-xl border border-[#d7d2ea] bg-white px-3 py-2 text-sm outline-none ring-[#c9bff0] focus:border-[#7a63b7] focus:ring-2"
+                        className="rounded-md border border-[#b9bba8] bg-white px-3 py-2 text-sm outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
                       >
                         <option value="all">All statuses</option>
                         <option value="pending">Pending</option>
@@ -2341,14 +2706,14 @@ export default function Home() {
                   </div>
 
                   {filteredAdminMatches.length === 0 ? (
-                    <p className="mt-5 rounded-xl border border-dashed border-[#d7d2ea] p-4 text-sm text-[#5c5385]">
+                    <p className="mt-5 rounded-md border border-dashed border-[#b9bba8] p-4 text-sm text-[#59604f]">
                       No matches have this status.
                     </p>
                   ) : (
                     <div className="mt-6 overflow-x-auto">
                       <table className="w-full min-w-[720px] border-collapse text-left text-sm">
                         <thead>
-                          <tr className="border-b border-[#d7d2ea] text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]">
+                          <tr className="border-b border-[#b9bba8] text-xs font-bold uppercase tracking-[0.08em] text-[#2a3723]">
                             <th className="px-3 py-3">Volunteer</th>
                             <th className="px-3 py-3">Caregiver</th>
                             <th className="px-3 py-3">Support requested</th>
@@ -2358,12 +2723,22 @@ export default function Home() {
                         </thead>
                         <tbody>
                           {filteredAdminMatches.map((match) => (
-                            <tr key={match.id} className="border-b border-[#eeeaf8] text-[#4f4578]">
-                              <td className="px-3 py-4 font-bold text-[#2c2455]">
-                                {match.volunteer_profile?.full_name || "Unknown volunteer"}
+                            <tr key={match.id} className="border-b border-[#dfddd5] text-[#41473b]">
+                              <td className="px-3 py-4 font-bold text-[#0c0a08]">
+                                <p>{match.volunteer_profile?.full_name || "Unknown volunteer"}</p>
+                                <p className="mt-1 text-xs font-normal text-[#59604f]">
+                                  {formatUniversity(
+                                    match.volunteer_profile?.university,
+                                  )}
+                                </p>
                               </td>
-                              <td className="px-3 py-4 font-bold text-[#2c2455]">
-                                {match.caregiver_profile?.full_name || "Unknown caregiver"}
+                              <td className="px-3 py-4 font-bold text-[#0c0a08]">
+                                <p>{match.caregiver_profile?.full_name || "Unknown caregiver"}</p>
+                                <p className="mt-1 text-xs font-normal text-[#59604f]">
+                                  {formatUniversity(
+                                    match.caregiver_profile?.university,
+                                  )}
+                                </p>
                               </td>
                               <td className="max-w-sm px-3 py-4">
                                 {match.care_type || "Not specified"}
@@ -2386,24 +2761,24 @@ export default function Home() {
                   )}
                 </section>
 
-                <section className="admin-section mt-10 border-t border-[#e5e0f4] pt-9">
+                <section className="admin-section mt-10 border-t border-[#d3d1c8] pt-9">
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div>
-                    <h4 className="text-2xl font-extrabold text-[#2c2455]">
+                    <h4 className="text-2xl font-extrabold text-[#0c0a08]">
                       Volunteer-Caregiver session logs
                     </h4>
-                    <p className="mt-2 text-base text-[#5c5385]">
+                    <p className="mt-2 text-base text-[#59604f]">
                       Full session details across all volunteers and caregivers.
                     </p>
                     </div>
-                    <p className="rounded-full bg-[#f0ecff] px-4 py-2 text-sm font-bold text-[#4a3c86]">
+                    <p className="rounded-md bg-[#dfe2d5] px-4 py-2 text-sm font-bold text-[#2a3723]">
                       {adminSessionsTotal} total hours
                     </p>
                   </div>
                   <div className="mt-5 flex flex-wrap items-center gap-3">
                     <label
                       htmlFor="admin-session-mentor-filter"
-                      className="text-xs font-bold uppercase tracking-[0.08em] text-[#6d57b8]"
+                      className="text-xs font-bold uppercase tracking-[0.08em] text-[#2a3723]"
                     >
                       Filter by volunteer
                     </label>
@@ -2413,7 +2788,7 @@ export default function Home() {
                       onChange={(event) =>
                         setAdminSessionMentorFilter(event.target.value)
                       }
-                      className="rounded-xl border border-[#d7d2ea] bg-white px-3 py-2 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                      className="rounded-md border border-[#b9bba8] bg-white px-3 py-2 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                     >
                       <option value="all">All volunteers</option>
                       {adminSessionMentorOptions.map((mentorName) => (
@@ -2424,37 +2799,37 @@ export default function Home() {
                     </select>
                   </div>
                   {isAdminLoading ? (
-                    <p className="mt-3 text-sm text-[#5c5385]">
+                    <p className="mt-3 text-sm text-[#59604f]">
                       Loading session logs...
                     </p>
                   ) : filteredAdminSessionEntries.length === 0 ? (
-                    <p className="mt-3 text-sm text-[#5c5385]">
+                    <p className="mt-3 text-sm text-[#59604f]">
                       No session logs match the selected volunteer.
                     </p>
                   ) : (
-                    <div className="mt-6 divide-y divide-[#e5e0f4] border-y border-[#e5e0f4]">
+                    <div className="mt-6 divide-y divide-[#d3d1c8] border-y border-[#d3d1c8]">
                       {filteredAdminSessionEntries.slice(0, 20).map((entry) => (
                         <article
                           key={`admin-session-${entry.id}`}
-                          className="grid gap-5 py-5 text-sm text-[#4f4578] md:grid-cols-[150px_1fr_1fr]"
+                          className="grid gap-5 py-5 text-sm text-[#41473b] md:grid-cols-[150px_1fr_1fr]"
                         >
                           <div>
                             <p className="request-label">Session</p>
-                            <p className="mt-2 font-bold text-[#2c2455]">
+                            <p className="mt-2 font-bold text-[#0c0a08]">
                               {new Date(entry.meeting_date).toLocaleDateString()}
                             </p>
-                            <p className="mt-1 text-lg font-extrabold text-[#6d57b8]">{entry.hours} hours</p>
+                            <p className="mt-1 text-lg font-extrabold text-[#2a3723]">{entry.hours} hours</p>
                           </div>
                           <div>
                             <p className="request-label">Participants</p>
                             <p className="mt-2"><span className="font-bold">Volunteer:</span> {entry.mentor_profile?.full_name || "Unknown volunteer"}</p>
                             <p className="mt-1"><span className="font-bold">Caregiver:</span> {entry.mentee_profile?.full_name || "Unknown caregiver"}</p>
-                            <p className="mt-1 text-xs text-[#5c5385]">Match #{entry.match_id}</p>
+                            <p className="mt-1 text-xs text-[#59604f]">Match #{entry.match_id}</p>
                           </div>
                           <div>
                             <p className="request-label">Session details</p>
                             <p className="mt-2 leading-6">{entry.topics_discussed || "No topics provided"}</p>
-                            <p className={`mt-2 leading-6 ${entry.anything_to_flag ? "font-semibold text-[#8f2525]" : "text-[#5c5385]"}`}>
+                            <p className={`mt-2 leading-6 ${entry.anything_to_flag ? "font-semibold text-[#8f2525]" : "text-[#59604f]"}`}>
                               <span className="font-bold">Anything to flag:</span>{" "}
                               {entry.anything_to_flag || "Nothing flagged"}
                             </p>
@@ -2466,13 +2841,13 @@ export default function Home() {
                   )}
                 </section>
 
-                <div className="admin-section mt-10 space-y-4 border-t border-[#e5e0f4] pt-9">
-                  <h4 className="text-2xl font-extrabold text-[#2c2455]">
+                <div className="admin-section mt-10 space-y-4 border-t border-[#d3d1c8] pt-9">
+                  <h4 className="text-2xl font-extrabold text-[#0c0a08]">
                     Pending applications
                   </h4>
                   {adminPendingUsers.length === 0 ? (
-                    <article className="rounded-2xl border border-dashed border-[#d7d2ea] bg-white p-4">
-                      <p className="text-sm text-[#5c5385]">
+                    <article className="rounded-lg border border-dashed border-[#b9bba8] bg-white p-4">
+                      <p className="text-sm text-[#59604f]">
                         No pending requests right now.
                       </p>
                     </article>
@@ -2480,19 +2855,19 @@ export default function Home() {
                     adminPendingUsers.map((user) => (
                       <article
                         key={user.id}
-                        className="rounded-2xl border border-[#e5e0f4] bg-white p-6"
+                        className="rounded-lg border border-[#d3d1c8] bg-white p-6"
                       >
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
-                            <p className="text-base font-bold text-[#2c2455]">
+                            <p className="text-base font-bold text-[#0c0a08]">
                               {user.full_name || "Unnamed user"}
                             </p>
-                            <p className="text-sm text-[#5c5385]">
+                            <p className="text-sm text-[#59604f]">
                               {user.role === "mentor" ? "Volunteer" : "Caregiver"} application - submitted{" "}
                               {new Date(user.created_at).toLocaleDateString()}
                             </p>
                             {user.bio && (
-                              <p className="mt-2 text-sm text-[#4f4578]">
+                              <p className="mt-2 text-sm text-[#41473b]">
                                 {user.bio}
                               </p>
                             )}
@@ -2503,8 +2878,12 @@ export default function Home() {
                               onClick={() =>
                                 handleAdminRequestAction(user.id, "approve")
                               }
-                              disabled={adminActionUserId === user.id}
-                              className="rounded-full bg-[#2c2455] px-4 py-2 text-sm font-bold text-white transition enabled:hover:bg-[#201943] disabled:cursor-not-allowed disabled:bg-slate-300"
+                              disabled={
+                                adminActionUserId === user.id ||
+                                !user.university ||
+                                user.university === "University not selected"
+                              }
+                              className="rounded-md bg-[#0c0a08] px-4 py-2 text-sm font-bold text-white transition enabled:hover:bg-[#1f2b1b] disabled:cursor-not-allowed disabled:bg-slate-300"
                             >
                               Approve
                             </button>
@@ -2514,14 +2893,14 @@ export default function Home() {
                                 handleAdminRequestAction(user.id, "reject")
                               }
                               disabled={adminActionUserId === user.id}
-                              className="rounded-full bg-[#fff2f2] px-4 py-2 text-sm font-bold text-[#9b2c2c] transition enabled:hover:bg-[#ffe3e3] disabled:cursor-not-allowed disabled:bg-slate-200"
+                              className="rounded-md bg-[#fff2f2] px-4 py-2 text-sm font-bold text-[#9b2c2c] transition enabled:hover:bg-[#ffe3e3] disabled:cursor-not-allowed disabled:bg-slate-200"
                             >
                               Reject
                             </button>
                           </div>
                         </div>
 
-                          <div className="mt-5 grid gap-4 border-t border-[#e5e0f4] pt-5 text-sm text-[#4f4578] md:grid-cols-2">
+                          <div className="mt-5 grid gap-4 border-t border-[#d3d1c8] pt-5 text-sm text-[#41473b] md:grid-cols-2">
                             <p>
                               <span className="font-bold">Username:</span>{" "}
                               {user.username || "Not provided"}
@@ -2530,6 +2909,17 @@ export default function Home() {
                               <span className="font-bold">Role:</span>{" "}
                               {user.role === "mentor" ? "Volunteer" : "Caregiver"}
                             </p>
+                            <p>
+                              <span className="font-bold">University:</span>{" "}
+                              {formatUniversity(user.university)}
+                            </p>
+                            {(!user.university ||
+                              user.university === "University not selected") && (
+                              <p className="font-semibold text-[#8a6500] md:col-span-2">
+                                Approval is unavailable until the applicant
+                                selects a university.
+                              </p>
+                            )}
 
                             {user.role === "mentor" && (
                               <>
@@ -2578,17 +2968,17 @@ export default function Home() {
                   )}
                 </div>
 
-                <div className="admin-section mt-10 space-y-4 border-t border-[#e5e0f4] pt-9">
-                  <h4 className="text-2xl font-extrabold text-[#2c2455]">
+                <div className="admin-section mt-10 space-y-4 border-t border-[#d3d1c8] pt-9">
+                  <h4 className="text-2xl font-extrabold text-[#0c0a08]">
                     Reviewed applications
                   </h4>
-                  <p className="text-sm text-[#5c5385]">
+                  <p className="text-sm text-[#59604f]">
                     View previously approved/rejected requests and update their
                     status.
                   </p>
                   {adminReviewedUsers.length === 0 ? (
-                    <article className="rounded-2xl border border-dashed border-[#d7d2ea] bg-white p-4">
-                      <p className="text-sm text-[#5c5385]">
+                    <article className="rounded-lg border border-dashed border-[#b9bba8] bg-white p-4">
+                      <p className="text-sm text-[#59604f]">
                         No reviewed requests yet.
                       </p>
                     </article>
@@ -2596,23 +2986,23 @@ export default function Home() {
                     adminReviewedUsers.map((user) => (
                       <article
                         key={`reviewed-${user.id}`}
-                        className={`hover-lift rounded-2xl border bg-white p-4 ${
+                        className={`hover-lift rounded-lg border bg-white p-4 ${
                           adminSelectedReviewedUser?.id === user.id
-                            ? "border-[#7a63b7] ring-2 ring-[#d5cbf4]"
-                            : "border-[#e5e0f4]"
+                            ? "border-[#2a3723] ring-2 ring-[#b9bba8]"
+                            : "border-[#d3d1c8]"
                         }`}
                       >
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
-                            <p className="text-base font-bold text-[#2c2455]">
+                            <p className="text-base font-bold text-[#0c0a08]">
                               {user.full_name || "Unnamed user"}
                             </p>
-                            <p className="text-sm text-[#5c5385]">
+                            <p className="text-sm text-[#59604f]">
                               {user.role === "mentor" ? "Volunteer" : "Caregiver"} - {user.approval_status} - submitted{" "}
                               {new Date(user.created_at).toLocaleDateString()}
                             </p>
                             {user.bio && (
-                              <p className="mt-2 text-sm text-[#4f4578]">
+                              <p className="mt-2 text-sm text-[#41473b]">
                                 {user.bio}
                               </p>
                             )}
@@ -2625,7 +3015,7 @@ export default function Home() {
                                   handleAdminRequestAction(user.id, "reject")
                                 }
                                 disabled={adminActionUserId === user.id}
-                                className="rounded-full bg-[#fff2f2] px-4 py-2 text-sm font-bold text-[#9b2c2c] transition enabled:hover:bg-[#ffe3e3] disabled:cursor-not-allowed disabled:bg-slate-200"
+                                className="rounded-md bg-[#fff2f2] px-4 py-2 text-sm font-bold text-[#9b2c2c] transition enabled:hover:bg-[#ffe3e3] disabled:cursor-not-allowed disabled:bg-slate-200"
                               >
                                 Revoke approval
                               </button>
@@ -2635,8 +3025,12 @@ export default function Home() {
                                 onClick={() =>
                                   handleAdminRequestAction(user.id, "approve")
                                 }
-                                disabled={adminActionUserId === user.id}
-                                className="rounded-full bg-[#2c2455] px-4 py-2 text-sm font-bold text-white transition enabled:hover:bg-[#201943] disabled:cursor-not-allowed disabled:bg-slate-300"
+                                disabled={
+                                  adminActionUserId === user.id ||
+                                  !user.university ||
+                                  user.university === "University not selected"
+                                }
+                                className="rounded-md bg-[#0c0a08] px-4 py-2 text-sm font-bold text-white transition enabled:hover:bg-[#1f2b1b] disabled:cursor-not-allowed disabled:bg-slate-300"
                               >
                                 Approve account
                               </button>
@@ -2648,7 +3042,7 @@ export default function Home() {
                                   current?.id === user.id ? null : user,
                                 )
                               }
-                              className="rounded-full bg-[#f0ecff] px-3 py-2 text-sm font-bold text-[#4a3c86] hover:bg-[#e0d8fb]"
+                              className="rounded-md bg-[#dfe2d5] px-3 py-2 text-sm font-bold text-[#2a3723] hover:bg-[#cbd0c1]"
                               aria-label={
                                 adminSelectedReviewedUser?.id === user.id
                                   ? "Hide profile details"
@@ -2663,7 +3057,7 @@ export default function Home() {
                         </div>
 
                         {adminSelectedReviewedUser?.id === user.id && (
-                          <div className="mt-4 rounded-xl bg-[#f7f4ff] p-3 text-sm text-[#4f4578]">
+                          <div className="mt-4 rounded-md bg-[#f4f2ec] p-3 text-sm text-[#41473b]">
                             <p>
                               <span className="font-bold">Name:</span>{" "}
                               {user.full_name || "Unnamed user"}
@@ -2683,6 +3077,10 @@ export default function Home() {
                             <p>
                               <span className="font-bold">Bio:</span>{" "}
                               {user.bio || "No bio provided."}
+                            </p>
+                            <p>
+                              <span className="font-bold">University:</span>{" "}
+                              {formatUniversity(user.university)}
                             </p>
 
                             {user.role === "mentor" && (
@@ -2733,11 +3131,11 @@ export default function Home() {
                   )}
                 </div>
 
-                <div className="admin-section mt-10 border-t border-[#e5e0f4] pt-9">
-                  <h4 className="text-2xl font-extrabold text-[#2c2455]">
+                <div className="admin-section mt-10 border-t border-[#d3d1c8] pt-9">
+                  <h4 className="text-2xl font-extrabold text-[#0c0a08]">
                     Volunteer profiles
                   </h4>
-                  <p className="mt-1 text-sm text-[#5c5385]">
+                  <p className="mt-1 text-sm text-[#59604f]">
                     Click a volunteer row to view their profile and caregiver
                     requests.
                   </p>
@@ -2745,8 +3143,8 @@ export default function Home() {
                   <div className="mt-4 grid gap-4 lg:grid-cols-2">
                     <div className="space-y-3">
                       {adminMentors.length === 0 ? (
-                        <article className="rounded-2xl border border-dashed border-[#d7d2ea] bg-white p-4">
-                          <p className="text-sm text-[#5c5385]">
+                        <article className="rounded-lg border border-dashed border-[#b9bba8] bg-white p-4">
+                          <p className="text-sm text-[#59604f]">
                             No approved volunteers found.
                           </p>
                         </article>
@@ -2756,21 +3154,24 @@ export default function Home() {
                             key={mentor.id}
                             type="button"
                             onClick={() => loadAdminMentorDetails(mentor.id)}
-                            className={`hover-lift w-full rounded-2xl border bg-white p-4 text-left ${
+                            className={`hover-lift w-full rounded-lg border bg-white p-4 text-left ${
                               adminSelectedMentor?.id === mentor.id
-                                ? "border-[#7a63b7] ring-2 ring-[#d5cbf4]"
-                                : "border-[#e5e0f4]"
+                                ? "border-[#2a3723] ring-2 ring-[#b9bba8]"
+                                : "border-[#d3d1c8]"
                             }`}
                           >
-                            <p className="text-base font-bold text-[#2c2455]">
+                            <p className="text-base font-bold text-[#0c0a08]">
                               {mentor.full_name || "Unnamed volunteer"}
                             </p>
-                            <p className="mt-1 text-sm text-[#5c5385]">
+                            <p className="mt-1 text-sm text-[#59604f]">
                               Visibility:{" "}
                               {mentor.is_visible ? "Visible" : "Hidden"}
                             </p>
+                            <p className="mt-1 text-sm font-semibold text-[#2a3723]">
+                              {formatUniversity(mentor.university)}
+                            </p>
                             {mentor.bio && (
-                              <p className="mt-2 text-sm text-[#4f4578] line-clamp-2">
+                              <p className="mt-2 text-sm text-[#41473b] line-clamp-2">
                                 {mentor.bio}
                               </p>
                             )}
@@ -2779,12 +3180,12 @@ export default function Home() {
                       )}
                     </div>
 
-                    <section className="rounded-2xl border border-[#e5e0f4] bg-white p-4">
-                      <h5 className="text-base font-bold text-[#2c2455]">
+                    <section className="rounded-lg border border-[#d3d1c8] bg-white p-4">
+                      <h5 className="text-base font-bold text-[#0c0a08]">
                         Volunteer details
                       </h5>
                       {isLoadingAdminMentorDetails && (
-                        <p className="mt-3 text-sm text-[#5c5385]">
+                        <p className="mt-3 text-sm text-[#59604f]">
                           Loading volunteer details...
                         </p>
                       )}
@@ -2796,7 +3197,7 @@ export default function Home() {
                       {!isLoadingAdminMentorDetails &&
                         !adminMentorDetailsError &&
                         !adminSelectedMentor && (
-                          <p className="mt-3 text-sm text-[#5c5385]">
+                          <p className="mt-3 text-sm text-[#59604f]">
                             Select a volunteer to view their profile and requests.
                           </p>
                         )}
@@ -2804,15 +3205,20 @@ export default function Home() {
                       {adminSelectedMentor && (
                         <div className="mt-3 space-y-3">
                           <div>
-                            <p className="text-sm font-bold text-[#2c2455]">
+                            <p className="text-sm font-bold text-[#0c0a08]">
                               {adminSelectedMentor.full_name ||
                                 "Unnamed volunteer"}
                             </p>
-                            <p className="text-sm text-[#5c5385]">
+                            <p className="text-sm text-[#59604f]">
                               Status: {adminSelectedMentor.approval_status} -{" "}
                               {adminSelectedMentor.is_visible
                                 ? "Visible"
                                 : "Hidden"}
+                            </p>
+                            <p className="mt-1 text-sm font-semibold text-[#2a3723]">
+                              {formatUniversity(
+                                adminSelectedMentor.university,
+                              )}
                             </p>
                           </div>
                           <div>
@@ -2824,17 +3230,17 @@ export default function Home() {
                               disabled={
                                 adminActionUserId === adminSelectedMentor.id
                               }
-                              className="rounded-full bg-[#fff2f2] px-4 py-2 text-xs font-bold uppercase tracking-[0.08em] text-[#9b2c2c] transition enabled:hover:bg-[#ffe3e3] disabled:cursor-not-allowed disabled:bg-slate-200"
+                              className="rounded-md bg-[#fff2f2] px-4 py-2 text-xs font-bold uppercase tracking-[0.08em] text-[#9b2c2c] transition enabled:hover:bg-[#ffe3e3] disabled:cursor-not-allowed disabled:bg-slate-200"
                             >
                               {adminActionUserId === adminSelectedMentor.id
                                 ? "Removing..."
                                 : "Remove volunteer listing + access"}
                             </button>
                           </div>
-                          <p className="text-sm text-[#4f4578]">
+                          <p className="text-sm text-[#41473b]">
                             {adminSelectedMentor.bio || "No bio provided."}
                           </p>
-                          <p className="text-sm text-[#4f4578]">
+                          <p className="text-sm text-[#41473b]">
                             <span className="font-bold">Skills:</span>{" "}
                             {(
                               (Array.isArray(
@@ -2845,7 +3251,7 @@ export default function Home() {
                                     ?.skills) ?? []
                             ).join(", ") || "Not set"}
                           </p>
-                          <p className="text-sm text-[#4f4578]">
+                          <p className="text-sm text-[#41473b]">
                             <span className="font-bold">Availability:</span>{" "}
                             {(Array.isArray(adminSelectedMentor.mentor_profiles)
                               ? adminSelectedMentor.mentor_profiles[0]
@@ -2855,11 +3261,11 @@ export default function Home() {
                           </p>
 
                           <div className="pt-2">
-                            <p className="text-sm font-bold text-[#2c2455]">
+                            <p className="text-sm font-bold text-[#0c0a08]">
                               Caregiver requests
                             </p>
                             {adminSelectedMentorRequests.length === 0 ? (
-                              <p className="mt-1 text-sm text-[#5c5385]">
+                              <p className="mt-1 text-sm text-[#59604f]">
                                 No requests for this volunteer yet.
                               </p>
                             ) : (
@@ -2867,20 +3273,25 @@ export default function Home() {
                                 {adminSelectedMentorRequests.map((request) => (
                                   <article
                                     key={request.id}
-                                    className="rounded-xl bg-[#f7f4ff] p-3"
+                                    className="rounded-md bg-[#f4f2ec] p-3"
                                   >
-                                    <p className="text-sm font-bold text-[#2c2455]">
+                                    <p className="text-sm font-bold text-[#0c0a08]">
                                       {request.mentee_profile?.full_name ||
                                         "Unnamed caregiver"}
                                     </p>
-                                    <p className="text-xs text-[#5c5385]">
+                                    <p className="text-xs text-[#59604f]">
                                       {request.status} -{" "}
                                       {new Date(
                                         request.created_at,
                                       ).toLocaleDateString()}
                                     </p>
+                                    <p className="mt-1 text-xs font-semibold text-[#2a3723]">
+                                      {formatUniversity(
+                                        request.mentee_profile?.university,
+                                      )}
+                                    </p>
                                     {request.mentee_profile?.bio && (
-                                      <p className="mt-1 text-sm text-[#4f4578]">
+                                      <p className="mt-1 text-sm text-[#41473b]">
                                         {request.mentee_profile.bio}
                                       </p>
                                     )}
@@ -2899,26 +3310,28 @@ export default function Home() {
 
             {(showMenteeExperience || showMentorDirectory) && (
               <>
-                <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
+                <section className="rounded-lg border border-[#b9bba8] bg-white p-6 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <h3 className="workspace-heading text-2xl font-bold text-[#2c2455]">
+                      <h3 className="workspace-heading text-2xl font-bold text-[#0c0a08]">
                         {showMentorDirectory
-                          ? "All volunteers"
+                          ? "Volunteer directory"
                           : "Browse volunteers"}
                       </h3>
-                      <p className="mt-1 text-sm text-[#5c5385]">
+                      <p className="mt-1 text-sm text-[#59604f]">
                         {showMentorDirectory
-                          ? "Preview every approved volunteer currently visible in the directory."
-                          : "Select one volunteer to request a match."}
+                          ? `Approved volunteers at ${profileForm.university || "your university"}.`
+                          : includeOtherUniversities
+                            ? "Select from available volunteers across Ontario universities."
+                            : `Showing available volunteers at ${profileForm.university || "your university"}.`}
                       </p>
                     </div>
-                    <p className="rounded-full bg-[#f0ecff] px-4 py-2 text-xs font-bold text-[#4a3c86]">
+                    <p className="rounded-md bg-[#dfe2d5] px-4 py-2 text-xs font-bold text-[#2a3723]">
                       {filteredVolunteers.length} of {volunteers.length} volunteers
                     </p>
                   </div>
                   {isLoadingVolunteers && (
-                    <p className="mt-3 text-sm text-[#5c5385]">
+                    <p className="mt-3 text-sm text-[#59604f]">
                       Loading volunteers from backend...
                     </p>
                   )}
@@ -2928,43 +3341,85 @@ export default function Home() {
                     </p>
                   )}
 
-                  <div className="mt-5 grid gap-3 lg:grid-cols-3">
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(event) => setSearchQuery(event.target.value)}
-                      placeholder="Search by name, city, language, specialty..."
-                      className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
-                    />
-                    <select
-                      value={availabilityFilter}
-                      onChange={(event) =>
-                        setAvailabilityFilter(event.target.value)
-                      }
-                      className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
-                    >
-                      <option value="all">All availability</option>
-                      {availabilityOptions.map((availability) => (
-                        <option key={availability} value={availability}>
-                          {availability}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={specialtyFilter}
-                      onChange={(event) =>
-                        setSpecialtyFilter(event.target.value)
-                      }
-                      className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
-                    >
-                      <option value="all">All specialties</option>
-                      {specialtyOptions.map((specialty) => (
-                        <option key={specialty} value={specialty}>
-                          {specialty}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <label className="flex flex-col gap-2 text-xs font-semibold text-[#59604f]">
+                      Search
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        placeholder="Name or specialty"
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm font-normal text-[#0c0a08] outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-2 text-xs font-semibold text-[#59604f]">
+                      University
+                      <select
+                        value={universityFilter}
+                        onChange={(event) => {
+                          setUniversityFilter(event.target.value);
+                          setSelectedVolunteerId("");
+                        }}
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm font-normal text-[#0c0a08] outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
+                      >
+                        <option value="all">All universities</option>
+                        {universityOptions.map((university) => (
+                          <option key={university} value={university}>
+                            {university}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-2 text-xs font-semibold text-[#59604f]">
+                      Availability
+                      <select
+                        value={availabilityFilter}
+                        onChange={(event) =>
+                          setAvailabilityFilter(event.target.value)
+                        }
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm font-normal text-[#0c0a08] outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
+                      >
+                        <option value="all">All availability</option>
+                        {availabilityOptions.map((availability) => (
+                          <option key={availability} value={availability}>
+                            {availability}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-2 text-xs font-semibold text-[#59604f]">
+                      Specialty
+                      <select
+                        value={specialtyFilter}
+                        onChange={(event) =>
+                          setSpecialtyFilter(event.target.value)
+                        }
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm font-normal text-[#0c0a08] outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
+                      >
+                        <option value="all">All specialties</option>
+                        {specialtyOptions.map((specialty) => (
+                          <option key={specialty} value={specialty}>
+                            {specialty}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
+                  {isApprovedMentee && (
+                    <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-md border border-[#b9bba8] bg-[#f5f3ed] px-4 py-3 text-sm font-semibold text-[#2a3723]">
+                      <input
+                        type="checkbox"
+                        checked={includeOtherUniversities}
+                        onChange={(event) => {
+                          setIncludeOtherUniversities(event.target.checked);
+                          setUniversityFilter("all");
+                          setSelectedVolunteerId("");
+                        }}
+                        className="h-4 w-4 rounded border-[#b9bba8] text-[#2a3723] focus:ring-[#2a3723]"
+                      />
+                      Include volunteers from other Ontario universities
+                    </label>
+                  )}
                 </section>
 
                 <section className="grid gap-4 md:grid-cols-2">
@@ -2973,29 +3428,32 @@ export default function Home() {
                     return (
                       <article
                         key={volunteer.id}
-                        className={`hover-lift rounded-3xl border bg-white p-5 shadow-sm transition ${
+                        className={`hover-lift rounded-lg border bg-white p-5 shadow-sm transition ${
                           isSelected
-                            ? "border-[#7a63b7] ring-2 ring-[#d5cbf4]"
-                            : "border-[#e5e0f4] hover:border-[#ad9adf]"
+                            ? "border-[#2a3723] ring-2 ring-[#b9bba8]"
+                            : "border-[#d3d1c8] hover:border-[#7f8b73]"
                         }`}
                       >
                         <div className="mb-3 flex items-start justify-between gap-2">
                           <div>
-                            <h4 className="text-lg font-bold text-[#2c2455]">
+                            <h4 className="text-lg font-bold text-[#0c0a08]">
                               {volunteer.name}
                             </h4>
-                            <p className="text-sm text-[#5c5385]">
+                            <p className="text-sm text-[#59604f]">
                               {volunteer.pronouns} | {volunteer.city}
+                            </p>
+                            <p className="mt-1 text-sm font-semibold text-[#2a3723]">
+                              {volunteer.university}
                             </p>
                           </div>
                           {showMenteeExperience && isSelected && (
-                            <span className="rounded-full bg-[#7a63b7] px-3 py-1 text-xs font-bold text-white">
+                            <span className="rounded-full bg-[#2a3723] px-3 py-1 text-xs font-bold text-white">
                               Selected
                             </span>
                           )}
                         </div>
 
-                        <p className="mb-4 text-sm leading-6 text-[#4f4578]">
+                        <p className="mb-4 text-sm leading-6 text-[#41473b]">
                           {volunteer.bio}
                         </p>
 
@@ -3015,7 +3473,7 @@ export default function Home() {
                           ))}
                         </div>
 
-                        <p className="mb-4 text-sm text-[#4f4578]">
+                        <p className="mb-4 text-sm text-[#41473b]">
                           <span className="font-bold">Availability:</span>{" "}
                           {volunteer.availability}
                         </p>
@@ -3024,10 +3482,10 @@ export default function Home() {
                           <button
                             type="button"
                             onClick={() => handleSelectVolunteer(volunteer.id)}
-                            className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                            className={`rounded-md px-4 py-2 text-sm font-semibold transition ${
                               isSelected
-                                ? "bg-[#f0ecff] text-[#4a3c86] hover:bg-[#e0d8fb]"
-                                : "bg-[#7a63b7] text-white hover:bg-[#654ea5]"
+                                ? "bg-[#dfe2d5] text-[#2a3723] hover:bg-[#cbd0c1]"
+                                : "bg-[#2a3723] text-white hover:bg-[#1f2b1b]"
                             }`}
                           >
                             {isSelected
@@ -3039,33 +3497,33 @@ export default function Home() {
                     );
                   })}
                   {filteredVolunteers.length === 0 && (
-                    <article className="rounded-3xl border border-dashed border-[#d7d2ea] bg-white p-6 md:col-span-2">
-                      <h4 className="text-lg font-bold text-[#2c2455]">
+                    <article className="rounded-lg border border-dashed border-[#b9bba8] bg-white p-6 md:col-span-2">
+                      <h4 className="text-lg font-bold text-[#0c0a08]">
                         No volunteers match this filter
                       </h4>
-                      <p className="mt-2 text-sm text-[#5c5385]">
-                        Try clearing your search, changing filters, or checking
-                        your backend token and volunteer visibility settings.
+                      <p className="mt-2 text-sm text-[#59604f]">
+                        Try clearing your filters or include volunteers from
+                        other Ontario universities.
                       </p>
                     </article>
                   )}
                 </section>
 
                 {isApprovedMentee && (
-                  <section className="rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-sm">
+                  <section className="portal-section">
                     <div className="flex items-center justify-between gap-2">
                       <div>
-                        <h3 className="workspace-heading text-2xl font-bold text-[#2c2455]">
+                        <h3 className="workspace-heading text-2xl font-bold text-[#0c0a08]">
                           Your sent requests
                         </h3>
-                        <p className="mt-1 text-sm text-[#5c5385]">
+                        <p className="mt-1 text-sm text-[#59604f]">
                           Track all volunteer requests you have submitted.
                         </p>
                       </div>
                     </div>
 
                     {isLoadingMenteeRequests && (
-                      <p className="mt-4 text-sm text-[#5c5385]">
+                      <p className="mt-4 text-sm text-[#59604f]">
                         Loading your requests...
                       </p>
                     )}
@@ -3076,8 +3534,8 @@ export default function Home() {
                     )}
 
                     {!isLoadingMenteeRequests && menteeRequests.length === 0 && (
-                      <article className="mt-4 rounded-2xl border border-dashed border-[#d7d2ea] bg-white p-4">
-                        <p className="text-sm text-[#5c5385]">
+                      <article className="mt-4 rounded-lg border border-dashed border-[#b9bba8] bg-white p-4">
+                        <p className="text-sm text-[#59604f]">
                           You have not sent any requests yet.
                         </p>
                       </article>
@@ -3087,28 +3545,33 @@ export default function Home() {
                       {menteeRequests.map((request) => (
                         <article
                           key={request.id}
-                          className="rounded-2xl border border-[#e5e0f4] bg-white p-4"
+                          className="rounded-lg border border-[#d3d1c8] bg-white p-4"
                         >
-                          <p className="text-base font-bold text-[#2c2455]">
+                          <p className="text-base font-bold text-[#0c0a08]">
                             {request.mentor_profile?.full_name || "Unknown volunteer"}
                           </p>
-                          <p className="text-sm text-[#5c5385]">
+                          <p className="text-sm text-[#59604f]">
                             Status: {request.status} - Sent{" "}
                             {new Date(request.created_at).toLocaleDateString()}
                           </p>
+                          <p className="mt-1 text-sm font-semibold text-[#2a3723]">
+                            {formatUniversity(
+                              request.mentor_profile?.university,
+                            )}
+                          </p>
                           {request.status === "active" && request.mentor_email && (
-                            <p className="mt-1 text-sm text-[#4f4578]">
+                            <p className="mt-1 text-sm text-[#41473b]">
                               <span className="font-bold">Volunteer email:</span>{" "}
                               {request.mentor_email}
                             </p>
                           )}
                           {request.mentor_profile?.bio && (
-                            <p className="mt-2 text-sm text-[#4f4578]">
+                            <p className="mt-2 text-sm text-[#41473b]">
                               {request.mentor_profile.bio}
                             </p>
                           )}
                           {request.status === "declined" && (
-                            <div className="mt-3 rounded-xl border border-[#f1cccc] bg-[#fff5f5] p-3">
+                            <div className="mt-3 rounded-md border border-[#f1cccc] bg-[#fff5f5] p-3">
                               <p className="font-bold text-[#8f2525]">
                                 This volunteer declined the request.
                               </p>
@@ -3124,14 +3587,17 @@ export default function Home() {
                 )}
 
                 {showMenteeExperience && selectedVolunteer && (
-                  <section className="sticky bottom-4 rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-lg">
+                  <section className="sticky bottom-4 rounded-lg border border-[#b9bba8] bg-white p-6 shadow-lg">
                     <div className="flex flex-col gap-4">
                       <div>
-                        <p className="text-sm text-[#5c5385]">
+                        <p className="text-sm text-[#59604f]">
                           Current selection
                         </p>
-                        <p className="text-lg font-bold text-[#2c2455]">
-                          {selectedVolunteer.name} ({selectedVolunteer.city})
+                        <p className="text-lg font-bold text-[#0c0a08]">
+                          {selectedVolunteer.name}
+                        </p>
+                        <p className="text-sm text-[#59604f]">
+                          {selectedVolunteer.university}
                         </p>
                       </div>
 
@@ -3140,7 +3606,7 @@ export default function Home() {
                           <div className="flex flex-col gap-2">
                             <label
                               htmlFor="care-type"
-                              className="text-sm font-bold text-[#3f346c]"
+                              className="text-sm font-bold text-[#2a3723]"
                             >
                               Type of care needed
                             </label>
@@ -3150,7 +3616,7 @@ export default function Home() {
                               onChange={(event) =>
                                 setCareType(event.target.value)
                               }
-                              className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                              className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                             >
                               <option value="">Select care type</option>
                               <option value="Dementia or Alzheimer's support">
@@ -3189,7 +3655,7 @@ export default function Home() {
                           !selectedVolunteer ||
                           !careType
                         }
-                        className="rounded-full bg-[#7a63b7] px-5 py-3 text-sm font-bold text-white transition enabled:hover:bg-[#654ea5] disabled:cursor-not-allowed disabled:bg-slate-300"
+                        className="rounded-md bg-[#2a3723] px-5 py-3 text-sm font-bold text-white transition enabled:hover:bg-[#1f2b1b] disabled:cursor-not-allowed disabled:bg-slate-300"
                       >
                         {isSendingMatch ? "Sending request..." : "Send match request"}
                       </button>
@@ -3202,42 +3668,42 @@ export default function Home() {
         )}
 
         {isUnlocked && isMatchSent && selectedVolunteer && (
-          <section className="rounded-3xl border border-[#ded6fb] bg-white p-8 shadow-sm">
-            <p className="mb-2 text-sm font-bold uppercase tracking-[0.2em] text-[#6d57b8]">
+          <section className="rounded-lg border border-[#b9bba8] bg-white p-8 shadow-sm">
+            <p className="mb-2 text-sm font-bold uppercase tracking-[0.2em] text-[#2a3723]">
               Request Sent
             </p>
-            <h3 className="text-2xl font-bold text-[#2c2455]">
+            <h3 className="text-2xl font-bold text-[#0c0a08]">
               Your request was sent to {selectedVolunteer.name}.
             </h3>
-            <p className="mt-3 max-w-3xl text-[#4f4578]">
+            <p className="mt-3 max-w-3xl text-[#41473b]">
               Thank you for submitting your request. The volunteer can now accept
               or decline it. You will receive an email when the status changes.
             </p>
 
             <div className="mt-6 grid gap-4 md:grid-cols-2">
-              <section className="rounded-2xl bg-[#f7f4ff] p-4">
-                <h4 className="mb-3 text-sm font-extrabold uppercase tracking-[0.08em] text-[#6d57b8]">
+              <section className="rounded-lg bg-[#f4f2ec] p-4">
+                <h4 className="mb-3 text-sm font-extrabold uppercase tracking-[0.08em] text-[#2a3723]">
                   Requested Volunteer
                 </h4>
-                <p className="text-sm text-[#4f4578]">
+                <p className="text-sm text-[#41473b]">
                   <span className="font-bold">Volunteer:</span>{" "}
                   {selectedVolunteer.name}
                 </p>
-                <p className="text-sm text-[#4f4578]">
-                  <span className="font-bold">Location:</span>{" "}
-                  {selectedVolunteer.city}
+                <p className="text-sm text-[#41473b]">
+                  <span className="font-bold">University:</span>{" "}
+                  {selectedVolunteer.university}
                 </p>
-                <p className="text-sm text-[#4f4578]">
+                <p className="text-sm text-[#41473b]">
                   <span className="font-bold">Availability:</span>{" "}
                   {selectedVolunteer.availability}
                 </p>
               </section>
 
-              <section className="rounded-2xl bg-[#f7f4ff] p-4">
-                <h4 className="mb-3 text-sm font-extrabold uppercase tracking-[0.08em] text-[#6d57b8]">
+              <section className="rounded-lg bg-[#f4f2ec] p-4">
+                <h4 className="mb-3 text-sm font-extrabold uppercase tracking-[0.08em] text-[#2a3723]">
                   Your Application
                 </h4>
-                <p className="text-sm text-[#4f4578]">
+                <p className="text-sm text-[#41473b]">
                   <span className="font-bold">Care type needed:</span>{" "}
                   {careType}
                 </p>
@@ -3247,7 +3713,7 @@ export default function Home() {
             <button
               type="button"
               onClick={handleRequestAnotherMentor}
-              className="mt-6 rounded-full bg-[#2c2455] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#201943]"
+              className="mt-6 rounded-md bg-[#0c0a08] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#1f2b1b]"
             >
               View request status
             </button>
@@ -3256,34 +3722,34 @@ export default function Home() {
 
         {isUnlocked && isSettingsOpen && (
           <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
-            <section className="pop-in max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-[#ded6fb] bg-white p-6 shadow-xl">
+            <section className="pop-in max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-[#b9bba8] bg-white p-6 shadow-xl">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <h3 className="text-2xl font-bold text-[#2c2455]">
+                  <h3 className="text-2xl font-bold text-[#0c0a08]">
                     Settings
                   </h3>
-                  <p className="mt-1 text-sm text-[#5c5385]">
+                  <p className="mt-1 text-sm text-[#59604f]">
                     Update your profile details and preferences.
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setIsSettingsOpen(false)}
-                  className="rounded-full bg-[#f0ecff] px-3 py-1 text-sm font-bold text-[#4a3c86]"
+                  className="rounded-md bg-[#dfe2d5] px-3 py-1 text-sm font-bold text-[#2a3723]"
                 >
                   Close
                 </button>
               </div>
 
               {profileData?.profile?.role && (
-                <p className="mt-4 inline-flex rounded-full bg-[#f0ecff] px-4 py-2 text-xs font-bold text-[#4a3c86]">
+                <p className="mt-4 inline-flex rounded-md bg-[#dfe2d5] px-4 py-2 text-xs font-bold text-[#2a3723]">
                   {profileData.profile.role} -{" "}
                   {profileData.profile.approval_status}
                 </p>
               )}
 
               {isProfileLoading && (
-                <p className="mt-4 text-sm text-[#5c5385]">
+                <p className="mt-4 text-sm text-[#59604f]">
                   Loading profile...
                 </p>
               )}
@@ -3303,7 +3769,7 @@ export default function Home() {
                   <div className="flex flex-col gap-2">
                     <label
                       htmlFor="profile-username"
-                      className="text-sm font-bold text-[#3f346c]"
+                      className="text-sm font-bold text-[#2a3723]"
                     >
                       Username
                     </label>
@@ -3320,13 +3786,13 @@ export default function Home() {
                       minLength={3}
                       maxLength={30}
                       pattern="[A-Za-z0-9_]+"
-                      className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                      className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                     />
                   </div>
                   <div className="flex flex-col gap-2">
                     <label
                       htmlFor="profile-full-name"
-                      className="text-sm font-bold text-[#3f346c]"
+                      className="text-sm font-bold text-[#2a3723]"
                     >
                       Full name
                     </label>
@@ -3340,35 +3806,44 @@ export default function Home() {
                           fullName: event.target.value,
                         }))
                       }
-                      className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                      className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                     />
                   </div>
 
-                  <div className="flex flex-col gap-2">
-                    <label
-                      htmlFor="profile-picture-url"
-                      className="text-sm font-bold text-[#3f346c]"
-                    >
-                      Profile picture URL
-                    </label>
-                    <input
-                      id="profile-picture-url"
-                      type="url"
-                      value={profileForm.profilePictureUrl}
-                      onChange={(event) =>
-                        setProfileForm((current) => ({
-                          ...current,
-                          profilePictureUrl: event.target.value,
-                        }))
-                      }
-                      className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
-                    />
-                  </div>
+                  {userRole !== "admin" && (
+                    <div className="md:col-span-2 flex flex-col gap-2">
+                      <label
+                        htmlFor="profile-university"
+                        className="text-sm font-bold text-[#2a3723]"
+                      >
+                        Ontario university
+                      </label>
+                      <select
+                        id="profile-university"
+                        value={profileForm.university}
+                        onChange={(event) =>
+                          setProfileForm((current) => ({
+                            ...current,
+                            university: event.target.value,
+                          }))
+                        }
+                        required
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
+                      >
+                        <option value="">Select your university</option>
+                        {ONTARIO_UNIVERSITIES.map((university) => (
+                          <option key={university} value={university}>
+                            {university}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   <div className="md:col-span-2 flex flex-col gap-2">
                     <label
                       htmlFor="profile-bio"
-                      className="text-sm font-bold text-[#3f346c]"
+                      className="text-sm font-bold text-[#2a3723]"
                     >
                       Bio
                     </label>
@@ -3382,7 +3857,7 @@ export default function Home() {
                           bio: event.target.value,
                         }))
                       }
-                      className="resize-y rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                      className="resize-y rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                     />
                   </div>
 
@@ -3391,7 +3866,7 @@ export default function Home() {
                       <div className="flex flex-col gap-2">
                         <label
                           htmlFor="profile-skills"
-                          className="text-sm font-bold text-[#3f346c]"
+                          className="text-sm font-bold text-[#2a3723]"
                         >
                           Skills (comma-separated)
                         </label>
@@ -3405,13 +3880,13 @@ export default function Home() {
                               skills: event.target.value,
                             }))
                           }
-                          className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                          className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                         />
                       </div>
                       <div className="flex flex-col gap-2">
                         <label
                           htmlFor="profile-mentor-mode"
-                          className="text-sm font-bold text-[#3f346c]"
+                          className="text-sm font-bold text-[#2a3723]"
                         >
                           Support format
                         </label>
@@ -3424,7 +3899,7 @@ export default function Home() {
                               mentorMode: event.target.value,
                             }))
                           }
-                          className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                          className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                         >
                           <option value="Remote">Remote</option>
                           <option value="In person">In person</option>
@@ -3433,7 +3908,7 @@ export default function Home() {
                       <div className="flex flex-col gap-2">
                         <label
                           htmlFor="profile-availability"
-                          className="text-sm font-bold text-[#3f346c]"
+                          className="text-sm font-bold text-[#2a3723]"
                         >
                           Availability
                         </label>
@@ -3447,7 +3922,7 @@ export default function Home() {
                               availability: event.target.value,
                             }))
                           }
-                          className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                          className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                         />
                       </div>
                       <div className="md:col-span-2 flex items-center gap-2">
@@ -3461,11 +3936,11 @@ export default function Home() {
                               isVisible: event.target.checked,
                             }))
                           }
-                          className="h-4 w-4 rounded border-[#d7d2ea] text-[#7a63b7] focus:ring-[#7a63b7]"
+                          className="h-4 w-4 rounded border-[#b9bba8] text-[#2a3723] focus:ring-[#2a3723]"
                         />
                         <label
                           htmlFor="profile-visible"
-                          className="text-sm font-bold text-[#3f346c]"
+                          className="text-sm font-bold text-[#2a3723]"
                         >
                           Accepting new caregiver matches
                         </label>
@@ -3478,7 +3953,7 @@ export default function Home() {
                       <div className="md:col-span-2 flex flex-col gap-2">
                         <label
                           htmlFor="profile-goals"
-                          className="text-sm font-bold text-[#3f346c]"
+                          className="text-sm font-bold text-[#2a3723]"
                         >
                           Goals
                         </label>
@@ -3492,13 +3967,13 @@ export default function Home() {
                               goals: event.target.value,
                             }))
                           }
-                          className="resize-y rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                          className="resize-y rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                         />
                       </div>
                       <div className="md:col-span-2 flex flex-col gap-2">
                         <label
                           htmlFor="profile-interests"
-                          className="text-sm font-bold text-[#3f346c]"
+                          className="text-sm font-bold text-[#2a3723]"
                         >
                           Interests (comma-separated)
                         </label>
@@ -3512,7 +3987,7 @@ export default function Home() {
                               interests: event.target.value,
                             }))
                           }
-                          className="rounded-xl border border-[#d7d2ea] px-4 py-3 text-sm outline-none ring-[#c9bff0] transition focus:border-[#7a63b7] focus:ring-2"
+                          className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                         />
                       </div>
                     </>
@@ -3524,7 +3999,7 @@ export default function Home() {
                 type="button"
                 onClick={handleSaveProfile}
                 disabled={isProfileLoading || isProfileSaving}
-                className="mt-5 rounded-full bg-[#2c2455] px-5 py-3 text-sm font-bold text-white transition enabled:hover:bg-[#201943] disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="mt-5 rounded-md bg-[#0c0a08] px-5 py-3 text-sm font-bold text-white transition enabled:hover:bg-[#1f2b1b] disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 {isProfileSaving ? "Saving..." : "Save profile"}
               </button>
