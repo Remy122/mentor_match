@@ -15,6 +15,7 @@ class ProfileSyncRequest(BaseModel):
     bio: str | None = Field(default=None, max_length=2000)
     profile_picture_url: str | None = Field(default=None, max_length=500)
     university: str | None = Field(default=None, min_length=1, max_length=120)
+    same_university_only: bool | None = None
     skills: list[str] | None = None
     availability: str | None = Field(default=None, max_length=500)
     goals: str | None = Field(default=None, max_length=2000)
@@ -33,6 +34,7 @@ class ProfileUpdateRequest(BaseModel):
     profile_picture_url: str | None = Field(default=None, max_length=500)
     university: str | None = Field(default=None, min_length=1, max_length=120)
     is_visible: bool | None = None
+    same_university_only: bool | None = None
     skills: list[str] | None = None
     availability: str | None = Field(default=None, max_length=500)
     goals: str | None = Field(default=None, max_length=2000)

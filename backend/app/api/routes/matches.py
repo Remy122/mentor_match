@@ -43,16 +43,18 @@ def get_available_mentors(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
     is_approved_mentee = requester["role"] == "mentee" and requester["approval_status"] == "approved"
     is_approved_admin = requester["role"] == "admin" and requester["approval_status"] == "approved"
-    is_approved_mentor = requester["role"] == "mentor" and requester["approval_status"] == "approved"
-    if not (is_approved_mentee or is_approved_admin or is_approved_mentor):
+    if not (is_approved_mentee or is_approved_admin):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only approved mentees, mentors, or admins can browse mentors.",
+            detail="Only approved caregivers or admins can browse volunteers.",
         )
 
     mentors_query = (
         supabase.table("profiles")
-        .select("id,full_name,bio,profile_picture_url,university,is_visible,approval_status,mentor_profiles(skills,availability)")
+        .select(
+            "id,full_name,bio,profile_picture_url,university,is_visible,"
+            "same_university_only,approval_status,mentor_profiles(availability)"
+        )
         .eq("role", "mentor")
         .eq("approval_status", "approved")
         .eq("is_visible", True)
@@ -60,23 +62,36 @@ def get_available_mentors(
 
     requester_university = requester.get("university")
     if (
-        not is_approved_admin
-        and (not requester_university or requester_university == UNIVERSITY_NOT_SELECTED)
+        not requester_university or requester_university == UNIVERSITY_NOT_SELECTED
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Select your university in Settings before browsing volunteers.",
         )
 
-    should_filter_by_university = not is_approved_admin and not include_other_universities
+    is_super_admin = is_approved_admin and bool(requester.get("is_super_admin"))
+    should_filter_by_university = (
+        (is_approved_admin and not is_super_admin)
+        or (is_approved_mentee and not include_other_universities)
+    )
     if should_filter_by_university:
         mentors_query = mentors_query.eq("university", requester_university)
 
     mentors_result = mentors_query.order("created_at", desc=False).execute()
+    mentors = mentors_result.data or []
+    if is_approved_mentee and include_other_universities:
+        mentors = [
+            mentor
+            for mentor in mentors
+            if not mentor.get("same_university_only")
+            or mentor.get("university") == requester_university
+        ]
     return {
-        "mentors": mentors_result.data or [],
+        "mentors": mentors,
         "university": requester_university,
-        "includes_other_universities": is_approved_admin or include_other_universities,
+        "includes_other_universities": is_super_admin or (
+            is_approved_mentee and include_other_universities
+        ),
     }
 
 
@@ -172,13 +187,16 @@ def get_my_requests(current_user: AuthUser = Depends(require_auth)) -> dict[str,
 
 @router.get("/mentor-requests/{mentor_id}")
 def get_mentor_requests_for_admin(
-    mentor_id: str, _: AuthUser = Depends(require_admin_role)
+    mentor_id: str, admin_user: AuthUser = Depends(require_admin_role)
 ) -> dict[str, Any]:
     supabase = get_supabase_client()
 
     mentor_result = (
         supabase.table("profiles")
-        .select("id,full_name,bio,profile_picture_url,university,is_visible,approval_status,mentor_profiles(skills,availability,total_hours)")
+        .select(
+            "id,full_name,bio,profile_picture_url,university,is_visible,"
+            "same_university_only,approval_status,mentor_profiles(availability,total_hours)"
+        )
         .eq("id", mentor_id)
         .eq("role", "mentor")
         .limit(1)
@@ -187,6 +205,8 @@ def get_mentor_requests_for_admin(
     if not mentor_result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mentor not found.")
     mentor = mentor_result.data[0]
+    if not admin_user.is_super_admin and mentor.get("university") != admin_user.university:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mentor not found.")
 
     matches_result = (
         supabase.table("matches")
@@ -209,6 +229,12 @@ def get_mentor_requests_for_admin(
             "mentee_profile": mentee_profiles.get(match["mentee_id"]),
         }
         for match in matches
+        if admin_user.is_super_admin
+        or (
+            mentee_profiles.get(match["mentee_id"])
+            and mentee_profiles[match["mentee_id"]].get("university")
+            == admin_user.university
+        )
     ]
     return {"mentor": mentor, "requests": enriched_requests}
 
@@ -233,6 +259,14 @@ def create_match_request(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mentor profile not found.")
     if mentor["role"] != "mentor" or mentor["approval_status"] != "approved" or not mentor["is_visible"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Mentor is not currently available.")
+    if (
+        mentor.get("same_university_only")
+        and mentor.get("university") != mentee.get("university")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This volunteer only accepts requests from caregivers at their university.",
+        )
 
     active_result = (
         supabase.table("matches")
@@ -375,11 +409,41 @@ def create_match_request(
 
 
 @router.post("/{match_id}/accept")
-def accept_match_request(match_id: int, _: AuthUser = Depends(require_admin_role)) -> dict[str, str]:
+def accept_match_request(
+    match_id: int,
+    admin_user: AuthUser = Depends(require_admin_role),
+) -> dict[str, str]:
     supabase = get_supabase_client()
-    existing = supabase.table("matches").select("id").eq("id", match_id).limit(1).execute()
+    existing = (
+        supabase.table("matches")
+        .select("id,mentor_id,mentee_id,status")
+        .eq("id", match_id)
+        .limit(1)
+        .execute()
+    )
     if not existing.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
+    match = existing.data[0]
+    if not admin_user.is_super_admin:
+        participants = get_profiles_by_ids(
+            supabase,
+            [match.get("mentor_id"), match.get("mentee_id")],
+            "id,university",
+        )
+        if any(
+            participants.get(participant_id, {}).get("university")
+            != admin_user.university
+            for participant_id in (match.get("mentor_id"), match.get("mentee_id"))
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Match not found.",
+            )
+    if match.get("status") != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only pending requests can be activated.",
+        )
 
     supabase.table("matches").update({"status": "active"}).eq("id", match_id).execute()
     return {"message": f"Match {match_id} marked active."}

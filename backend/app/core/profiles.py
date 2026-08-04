@@ -3,7 +3,8 @@ from typing import Any, Iterable
 
 PROFILE_COLUMNS = (
     "id,role,username,full_name,bio,profile_picture_url,"
-    "university,approval_status,is_visible,created_at"
+    "university,approval_status,is_visible,same_university_only,"
+    "is_super_admin,created_at"
 )
 
 

@@ -14,6 +14,8 @@
 /coverage
 /.pytest_cache/
 backend/.pytest_cache/
+frontend/playwright-report/
+frontend/test-results/
 
 # next.js
 /.next/
@@ -43,6 +45,7 @@ yarn-error.log*
 next-env.d.ts
 
 frontend/.next/
+frontend/.next-e2e/
 frontend/node_modules/
 backend/.venv/
 

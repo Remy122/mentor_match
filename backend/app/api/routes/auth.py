@@ -108,6 +108,8 @@ def sync_profile(payload: ProfileSyncRequest, current_user: AuthUser = Depends(r
         profile_fields["bio"] = payload.bio
     if payload.profile_picture_url is not None:
         profile_fields["profile_picture_url"] = payload.profile_picture_url
+    if payload.same_university_only is not None and desired_role == "mentor":
+        profile_fields["same_university_only"] = payload.same_university_only
 
     metadata_university = None
     if isinstance(raw_user_metadata, dict):
@@ -176,6 +178,11 @@ def update_me(payload: ProfileUpdateRequest, current_user: AuthUser = Depends(re
     if payload.profile_picture_url is not None:
         profile_updates["profile_picture_url"] = payload.profile_picture_url
     if payload.university is not None:
+        if target_role == "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin university assignments are managed by the super-admin.",
+            )
         profile_updates["university"] = _validate_university(payload.university)
 
     if payload.is_visible is not None:
@@ -185,6 +192,14 @@ def update_me(payload: ProfileUpdateRequest, current_user: AuthUser = Depends(re
                 detail="Only mentors can change visibility.",
             )
         profile_updates["is_visible"] = payload.is_visible
+
+    if payload.same_university_only is not None:
+        if target_role != "mentor":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only mentors can change profile audience settings.",
+            )
+        profile_updates["same_university_only"] = payload.same_university_only
 
     if profile_updates:
         supabase.table("profiles").update(profile_updates).eq("id", current_user.id).execute()

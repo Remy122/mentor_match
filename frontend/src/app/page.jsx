@@ -2,7 +2,6 @@
 
 import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
-import Pill from "../components/Pill";
 import {
   apiFetch,
   BACKEND_BASE_URL,
@@ -15,6 +14,37 @@ import {
 } from "../lib/portalUtils";
 import { ONTARIO_UNIVERSITIES } from "../lib/ontarioUniversities";
 import { supabase, hasSupabaseEnv } from "../lib/supabaseClient";
+
+const EMPTY_ADMIN_INVITE_FORM = {
+  email: "",
+  role: "mentor",
+  university: "",
+};
+
+const EMPTY_ADMIN_PROFILE_FORM = {
+  email: "",
+  password: "",
+  role: "mentor",
+  username: "",
+  fullName: "",
+  university: "",
+  bio: "",
+  approvalStatus: "approved",
+  isVisible: false,
+  sameUniversityOnly: true,
+  mentorMode: "Remote",
+  availability: "",
+  goals: "",
+  interests: "",
+};
+
+const ERROR_MESSAGES = {
+  load: "We couldn't load this information. Please try again.",
+  profile: "We couldn't load your account. Please try again.",
+  save: "We couldn't save your changes. Please try again.",
+  action: "We couldn't complete that action. Please try again.",
+  auth: "We couldn't complete your request. Please check your details and try again.",
+};
 
 export default function Home() {
   const [emailInput, setEmailInput] = useState("");
@@ -30,7 +60,6 @@ export default function Home() {
   const [signupFullName, setSignupFullName] = useState("");
   const [signupUniversity, setSignupUniversity] = useState("");
   const [signupBio, setSignupBio] = useState("");
-  const [signupSkills, setSignupSkills] = useState("");
   const [signupMentorMode, setSignupMentorMode] = useState("Remote");
   const [signupAvailability, setSignupAvailability] = useState("");
   const [signupGoals, setSignupGoals] = useState("");
@@ -49,8 +78,9 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState("");
   const [universityFilter, setUniversityFilter] = useState("all");
   const [availabilityFilter, setAvailabilityFilter] = useState("all");
-  const [specialtyFilter, setSpecialtyFilter] = useState("all");
   const [includeOtherUniversities, setIncludeOtherUniversities] =
+    useState(false);
+  const [didAutoExpandUniversitySearch, setDidAutoExpandUniversitySearch] =
     useState(false);
   const [profileData, setProfileData] = useState(null);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
@@ -64,7 +94,7 @@ export default function Home() {
     university: "",
     bio: "",
     isVisible: false,
-    skills: "",
+    sameUniversityOnly: true,
     mentorMode: "Remote",
     availability: "",
     goals: "",
@@ -77,6 +107,17 @@ export default function Home() {
   const [adminMetrics, setAdminMetrics] = useState(null);
   const [adminMentors, setAdminMentors] = useState([]);
   const [adminMatches, setAdminMatches] = useState([]);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [adminPreapprovedEmails, setAdminPreapprovedEmails] = useState([]);
+  const [adminInviteForm, setAdminInviteForm] = useState(
+    EMPTY_ADMIN_INVITE_FORM,
+  );
+  const [adminProfileForm, setAdminProfileForm] = useState(
+    EMPTY_ADMIN_PROFILE_FORM,
+  );
+  const [adminEditingUserId, setAdminEditingUserId] = useState("");
+  const [isAdminInviteSaving, setIsAdminInviteSaving] = useState(false);
+  const [isAdminProfileSaving, setIsAdminProfileSaving] = useState(false);
   const [adminMatchStatusFilter, setAdminMatchStatusFilter] = useState("all");
   const [adminSessionEntries, setAdminSessionEntries] = useState([]);
   const [adminSessionsTotal, setAdminSessionsTotal] = useState(0);
@@ -95,7 +136,7 @@ export default function Home() {
   const [isLoadingAdminMentorDetails, setIsLoadingAdminMentorDetails] =
     useState(false);
   const [adminMentorDetailsError, setAdminMentorDetailsError] = useState("");
-  const [mentorViewMode, setMentorViewMode] = useState("directory");
+  const [mentorViewMode, setMentorViewMode] = useState("requests");
   const [mentorRequests, setMentorRequests] = useState([]);
   const [isLoadingMentorRequests, setIsLoadingMentorRequests] = useState(false);
   const [mentorRequestsError, setMentorRequestsError] = useState("");
@@ -125,12 +166,6 @@ export default function Home() {
     [volunteers],
   );
 
-  const specialtyOptions = useMemo(
-    () =>
-      [...new Set(volunteers.flatMap((volunteer) => volunteer.focus))].sort(),
-    [volunteers],
-  );
-
   const universityOptions = useMemo(
     () =>
       [...new Set(volunteers.map((volunteer) => volunteer.university))]
@@ -149,22 +184,16 @@ export default function Home() {
       const matchesAvailability =
         availabilityFilter === "all" ||
         volunteer.availability === availabilityFilter;
-      const matchesSpecialty =
-        specialtyFilter === "all" || volunteer.focus.includes(specialtyFilter);
-
       if (!normalizedSearch) {
-        return matchesUniversity && matchesAvailability && matchesSpecialty;
+        return matchesUniversity && matchesAvailability;
       }
 
       const searchableText = [
         volunteer.name,
-        volunteer.pronouns,
         volunteer.city,
         volunteer.bio,
         volunteer.university,
         volunteer.availability,
-        ...volunteer.languages,
-        ...volunteer.focus,
       ]
         .join(" ")
         .toLowerCase();
@@ -173,15 +202,12 @@ export default function Home() {
 
       return (
         matchesUniversity &&
-        matchesAvailability &&
-        matchesSpecialty &&
-        matchesSearch
+        matchesAvailability && matchesSearch
       );
     });
   }, [
     availabilityFilter,
     searchQuery,
-    specialtyFilter,
     universityFilter,
     volunteers,
   ]);
@@ -198,12 +224,17 @@ export default function Home() {
   const isApproved = approvalStatus === "approved";
   const isApprovedMentee = isMentee && isApproved;
   const isApprovedMentor = isMentor && isApproved;
+  const isSuperAdmin = Boolean(profileData?.profile?.is_super_admin);
+  const hasAdminUniversityScope = Boolean(
+    isSuperAdmin ||
+      (profileData?.profile?.university &&
+        profileData.profile.university !== "University not selected"),
+  );
   const isAwaitingApproval =
     (isMentee || isMentor) && approvalStatus !== "approved";
   const showAdminDashboard = isAdmin && adminViewMode === "admin";
   const showMenteeExperience =
     isApprovedMentee || (isAdmin && adminViewMode === "mentee");
-  const showMentorDirectory = isApprovedMentor && mentorViewMode === "directory";
   const showMentorRequests = isApprovedMentor && mentorViewMode === "requests";
   const showMentorMentees = isApprovedMentor && mentorViewMode === "mentees";
   const activeMenteeConnections = useMemo(
@@ -237,6 +268,10 @@ export default function Home() {
       (match) => match.status === adminMatchStatusFilter,
     );
   }, [adminMatchStatusFilter, adminMatches]);
+  const adminEditingUser = useMemo(
+    () => adminUsers.find((user) => user.id === adminEditingUserId) ?? null,
+    [adminEditingUserId, adminUsers],
+  );
   const userInitial = useMemo(
     () =>
       (
@@ -347,7 +382,7 @@ export default function Home() {
         }
 
         if (!response.ok) {
-          throw new Error(`Failed to load profile (${response.status})`);
+          throw new Error();
         }
 
         let data = await response.json();
@@ -401,18 +436,14 @@ export default function Home() {
               : profile.university ?? "",
           bio: profile.bio ?? "",
           isVisible: Boolean(profile.is_visible),
-          skills: (mentorProfile.skills ?? []).join(", "),
+          sameUniversityOnly: profile.same_university_only !== false,
           mentorMode: mentorAvailabilityInfo.mentorMode,
           availability: mentorAvailabilityInfo.availability,
           goals: menteeProfile.goals ?? "",
           interests: (menteeProfile.interests ?? []).join(", "),
         });
-      } catch (error) {
-        setProfileError(
-          error instanceof Error
-            ? error.message
-            : "Could not load your profile.",
-        );
+      } catch (_error) {
+        setProfileError(ERROR_MESSAGES.profile);
       } finally {
         setIsProfileLoading(false);
       }
@@ -422,7 +453,15 @@ export default function Home() {
   }, [isUnlocked]);
 
   useEffect(() => {
-    if (!isUnlocked || !(showMenteeExperience || showMentorDirectory)) {
+    if (!isApprovedMentee) return;
+    setIncludeOtherUniversities(false);
+    setDidAutoExpandUniversitySearch(false);
+    setUniversityFilter("all");
+    setSelectedVolunteerId("");
+  }, [isApprovedMentee, profileData?.profile?.university]);
+
+  useEffect(() => {
+    if (!isUnlocked || !showMenteeExperience) {
       setVolunteers([]);
       setIsLoadingVolunteers(false);
       setVolunteerLoadError("");
@@ -434,9 +473,7 @@ export default function Home() {
 
       if (!token) {
         setVolunteers([]);
-        setVolunteerLoadError(
-          "Your session has expired. Sign in again to load volunteers.",
-        );
+        setVolunteerLoadError("Your session ended. Please sign in again.");
         return;
       }
 
@@ -457,37 +494,25 @@ export default function Home() {
         );
 
         if (!response.ok) {
-          let detail = "";
-          try {
-            const errorPayload = await response.json();
-            detail =
-              errorPayload?.detail ||
-              errorPayload?.message ||
-              errorPayload?.error ||
-              "";
-          } catch (_error) {
-            detail = "";
-          }
-
-          if (response.status === 403) {
-            throw new Error(
-              "Account not approved yet. Please wait for admin approval.",
-            );
-          }
-
-          throw new Error(detail || `Failed to load mentors (${response.status})`);
+          throw new Error();
         }
 
         const data = await response.json();
         const normalized = (data.mentors ?? []).map(normalizeMentor);
+        if (
+          isApprovedMentee &&
+          !includeOtherUniversities &&
+          normalized.length === 0
+        ) {
+          setVolunteers([]);
+          setDidAutoExpandUniversitySearch(true);
+          setIncludeOtherUniversities(true);
+          return;
+        }
         setVolunteers(normalized);
-      } catch (error) {
+      } catch (_error) {
         setVolunteers([]);
-        setVolunteerLoadError(
-          error instanceof Error
-            ? error.message
-            : "Could not load volunteers from backend.",
-        );
+        setVolunteerLoadError(ERROR_MESSAGES.load);
       } finally {
         setIsLoadingVolunteers(false);
       }
@@ -497,15 +522,15 @@ export default function Home() {
   }, [
     includeOtherUniversities,
     isUnlocked,
+    isApprovedMentee,
     profileData?.profile?.university,
     showMenteeExperience,
-    showMentorDirectory,
   ]);
 
   async function handleSaveProfile() {
     const token = window.localStorage.getItem("ocgoAccessToken");
     if (!token) {
-      setProfileError("Missing access token. Please sign in again.");
+      setProfileError("Your session ended. Please sign in again.");
       return;
     }
 
@@ -516,7 +541,7 @@ export default function Home() {
       university: profileForm.university,
       bio: profileForm.bio.trim(),
       is_visible: profileForm.isVisible,
-      skills: parseCommaSeparated(profileForm.skills),
+      same_university_only: profileForm.sameUniversityOnly,
       availability: buildMentorAvailability(
         profileForm.availability,
         profileForm.mentorMode,
@@ -536,9 +561,9 @@ export default function Home() {
     }
 
     if (role !== "mentor") {
-      delete payload.skills;
       delete payload.availability;
       delete payload.is_visible;
+      delete payload.same_university_only;
     }
     if (role !== "mentee") {
       delete payload.goals;
@@ -560,18 +585,7 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        let detail = "";
-        try {
-          const errorPayload = await response.json();
-          detail =
-            errorPayload?.detail ||
-            errorPayload?.message ||
-            errorPayload?.error ||
-            "";
-        } catch (_error) {
-          detail = "";
-        }
-        throw new Error(detail || `Failed to save profile (${response.status})`);
+        throw new Error();
       }
 
       const updated = await response.json();
@@ -592,17 +606,15 @@ export default function Home() {
             : updatedProfile.university ?? "",
         bio: updatedProfile.bio ?? "",
         isVisible: Boolean(updatedProfile.is_visible),
-        skills: (updatedMentor.skills ?? []).join(", "),
+        sameUniversityOnly: updatedProfile.same_university_only !== false,
         mentorMode: updatedMentorAvailabilityInfo.mentorMode,
         availability: updatedMentorAvailabilityInfo.availability,
         goals: updatedMentee.goals ?? "",
         interests: (updatedMentee.interests ?? []).join(", "),
       });
       setProfileSaveMessage("Profile saved.");
-    } catch (error) {
-      setProfileError(
-        error instanceof Error ? error.message : "Could not save profile.",
-      );
+    } catch (_error) {
+      setProfileError(ERROR_MESSAGES.save);
     } finally {
       setIsProfileSaving(false);
     }
@@ -623,6 +635,8 @@ export default function Home() {
         mentorsResponse,
         sessionsResponse,
         matchesResponse,
+        usersResponse,
+        preapprovedEmailsResponse,
       ] =
         await Promise.all([
           apiFetch(`${BACKEND_BASE_URL}/api/admin/pending-users`, {
@@ -655,33 +669,31 @@ export default function Home() {
               Authorization: `Bearer ${token}`,
             },
           }),
+          apiFetch(`${BACKEND_BASE_URL}/api/admin/users`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }),
+          apiFetch(`${BACKEND_BASE_URL}/api/admin/preapproved-emails`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }),
         ]);
 
-      if (!pendingResponse.ok) {
-        throw new Error(
-          `Failed to load pending requests (${pendingResponse.status})`,
-        );
-      }
-      if (!reviewedResponse.ok) {
-        throw new Error(
-          `Failed to load reviewed requests (${reviewedResponse.status})`,
-        );
-      }
-      if (!metricsResponse.ok) {
-        throw new Error(
-          `Failed to load dashboard metrics (${metricsResponse.status})`,
-        );
-      }
-      if (!mentorsResponse.ok) {
-        throw new Error(`Failed to load mentors (${mentorsResponse.status})`);
-      }
-      if (!sessionsResponse.ok) {
-        throw new Error(
-          `Failed to load volunteer sessions (${sessionsResponse.status})`,
-        );
-      }
-      if (!matchesResponse.ok) {
-        throw new Error(`Failed to load matches (${matchesResponse.status})`);
+      if (
+        [
+          pendingResponse,
+          reviewedResponse,
+          metricsResponse,
+          mentorsResponse,
+          sessionsResponse,
+          matchesResponse,
+          usersResponse,
+          preapprovedEmailsResponse,
+        ].some((response) => !response.ok)
+      ) {
+        throw new Error();
       }
 
       const pendingData = await pendingResponse.json();
@@ -690,6 +702,8 @@ export default function Home() {
       const mentorsData = await mentorsResponse.json();
       const sessionsData = await sessionsResponse.json();
       const matchesData = await matchesResponse.json();
+      const usersData = await usersResponse.json();
+      const preapprovedEmailsData = await preapprovedEmailsResponse.json();
 
       setAdminPendingUsers(pendingData.pending_users ?? []);
       setAdminReviewedUsers(reviewedData.reviewed_users ?? []);
@@ -698,6 +712,10 @@ export default function Home() {
       setAdminSessionEntries(sessionsData.entries ?? []);
       setAdminSessionsTotal(sessionsData.total_hours ?? 0);
       setAdminMatches(matchesData.matches ?? []);
+      setAdminUsers(usersData.users ?? []);
+      setAdminPreapprovedEmails(
+        preapprovedEmailsData.preapproved_emails ?? [],
+      );
       setAdminSelectedReviewedUser((current) => {
         if (!current) return null;
         return (
@@ -706,12 +724,8 @@ export default function Home() {
           ) ?? null
         );
       });
-    } catch (error) {
-      setAdminError(
-        error instanceof Error
-          ? error.message
-          : "Could not load admin dashboard data.",
-      );
+    } catch (_error) {
+      setAdminError(ERROR_MESSAGES.load);
     } finally {
       setIsAdminLoading(false);
     }
@@ -743,20 +757,16 @@ export default function Home() {
       );
 
       if (!response.ok) {
-        throw new Error(`Failed to load mentor details (${response.status})`);
+        throw new Error();
       }
 
       const data = await response.json();
       setAdminSelectedMentor(data.mentor ?? null);
       setAdminSelectedMentorRequests(data.requests ?? []);
-    } catch (error) {
+    } catch (_error) {
       setAdminSelectedMentor(null);
       setAdminSelectedMentorRequests([]);
-      setAdminMentorDetailsError(
-        error instanceof Error
-          ? error.message
-          : "Could not load mentor details.",
-      );
+      setAdminMentorDetailsError(ERROR_MESSAGES.load);
     } finally {
       setIsLoadingAdminMentorDetails(false);
     }
@@ -769,6 +779,13 @@ export default function Home() {
       setAdminMetrics(null);
       setAdminMentors([]);
       setAdminMatches([]);
+      setAdminUsers([]);
+      setAdminPreapprovedEmails([]);
+      setAdminInviteForm(EMPTY_ADMIN_INVITE_FORM);
+      setAdminProfileForm(EMPTY_ADMIN_PROFILE_FORM);
+      setAdminEditingUserId("");
+      setIsAdminInviteSaving(false);
+      setIsAdminProfileSaving(false);
       setAdminMatchStatusFilter("all");
       setAdminSessionEntries([]);
       setAdminSessionsTotal(0);
@@ -785,14 +802,34 @@ export default function Home() {
       return;
     }
 
+    if (!hasAdminUniversityScope) {
+      setAdminError("");
+      setIsAdminLoading(false);
+      return;
+    }
+
     loadAdminDashboardData();
-  }, [isAdmin, isUnlocked]);
+  }, [hasAdminUniversityScope, isAdmin, isUnlocked]);
 
   useEffect(() => {
     if (!isAdmin) {
       setAdminViewMode("admin");
     }
   }, [isAdmin]);
+
+  useEffect(() => {
+    const adminUniversity = profileData?.profile?.university;
+    if (!isAdmin || isSuperAdmin || !adminUniversity) return;
+
+    setAdminInviteForm((current) => ({
+      ...current,
+      university: adminUniversity,
+    }));
+    setAdminProfileForm((current) => ({
+      ...current,
+      university: adminUniversity,
+    }));
+  }, [isAdmin, isSuperAdmin, profileData?.profile?.university]);
 
   async function loadMenteeRequestsData() {
     const token = window.localStorage.getItem("ocgoAccessToken");
@@ -809,16 +846,14 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to load your requests (${response.status})`);
+        throw new Error();
       }
 
       const data = await response.json();
       setMenteeRequests(data.requests ?? []);
-    } catch (error) {
+    } catch (_error) {
       setMenteeRequests([]);
-      setMenteeRequestsError(
-        error instanceof Error ? error.message : "Could not load your requests.",
-      );
+      setMenteeRequestsError(ERROR_MESSAGES.load);
     } finally {
       setIsLoadingMenteeRequests(false);
     }
@@ -853,31 +888,14 @@ export default function Home() {
       );
 
       if (!response.ok) {
-        let detail = "";
-        try {
-          const errorPayload = await response.json();
-          detail =
-            errorPayload?.detail ||
-            errorPayload?.message ||
-            errorPayload?.error ||
-            "";
-        } catch (_error) {
-          detail = "";
-        }
-        throw new Error(detail || `Failed to load requests (${response.status})`);
+        throw new Error();
       }
 
       const data = await response.json();
       setMentorRequests(data.requests ?? []);
-    } catch (error) {
+    } catch (_error) {
       setMentorRequests([]);
-      setMentorRequestsError(
-        error instanceof Error
-          ? error.message === "Failed to fetch"
-            ? "Temporary backend connection issue. Please refresh."
-            : error.message
-          : "Could not load caregiver requests.",
-      );
+      setMentorRequestsError(ERROR_MESSAGES.load);
     } finally {
       setIsLoadingMentorRequests(false);
     }
@@ -898,20 +916,16 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to load volunteer hours (${response.status})`);
+        throw new Error();
       }
 
       const data = await response.json();
       setMentorHoursEntries(data.entries ?? []);
       setMentorHoursTotal(data.total_hours ?? 0);
-    } catch (error) {
+    } catch (_error) {
       setMentorHoursEntries([]);
       setMentorHoursTotal(0);
-      setMentorHoursError(
-        error instanceof Error
-          ? error.message
-          : "Could not load volunteer hour logs.",
-      );
+      setMentorHoursError(ERROR_MESSAGES.load);
     } finally {
       setIsMentorHoursLoading(false);
     }
@@ -920,7 +934,7 @@ export default function Home() {
   async function handleMentorDecision(matchId, decision) {
     const token = window.localStorage.getItem("ocgoAccessToken");
     if (!token) {
-      setMentorDecisionError("Missing access token. Please sign in again.");
+      setMentorDecisionError("Your session ended. Please sign in again.");
       return;
     }
 
@@ -944,7 +958,7 @@ export default function Home() {
       );
 
       if (!response.ok) {
-        throw new Error(`Failed to ${decision} request (${response.status})`);
+        throw new Error();
       }
 
       setMentorDecisionSuccess(
@@ -953,12 +967,8 @@ export default function Home() {
           : "Caregiver request declined.",
       );
       await loadMentorRequestsData();
-    } catch (error) {
-      setMentorDecisionError(
-        error instanceof Error
-          ? error.message
-          : "Could not update this request.",
-      );
+    } catch (_error) {
+      setMentorDecisionError(ERROR_MESSAGES.action);
     } finally {
       setMentorDecisionLoadingId(null);
     }
@@ -969,7 +979,7 @@ export default function Home() {
 
     const token = window.localStorage.getItem("ocgoAccessToken");
     if (!token) {
-      setMentorHoursError("Missing access token. Please sign in again.");
+      setMentorHoursError("Your session ended. Please sign in again.");
       return;
     }
     if (
@@ -1006,7 +1016,7 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to log volunteer hours (${response.status})`);
+        throw new Error();
       }
 
       setMentorHoursSuccess("Volunteer hours logged.");
@@ -1019,12 +1029,8 @@ export default function Home() {
         anythingToFlag: "",
       }));
       await loadMentorHoursData();
-    } catch (error) {
-      setMentorHoursError(
-        error instanceof Error
-          ? error.message
-          : "Could not log volunteer hours.",
-      );
+    } catch (_error) {
+      setMentorHoursError(ERROR_MESSAGES.action);
     } finally {
       setIsMentorHoursSaving(false);
     }
@@ -1032,7 +1038,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!isApprovedMentor) {
-      setMentorViewMode("directory");
+      setMentorViewMode("requests");
       setMentorRequests([]);
       setMentorRequestsError("");
       setIsLoadingMentorRequests(false);
@@ -1072,7 +1078,7 @@ export default function Home() {
   async function handleAdminRequestAction(userId, action) {
     const token = window.localStorage.getItem("ocgoAccessToken");
     if (!token) {
-      setAdminError("Missing access token. Please sign in again.");
+      setAdminError("Your session ended. Please sign in again.");
       return;
     }
 
@@ -1092,7 +1098,7 @@ export default function Home() {
       );
 
       if (!response.ok) {
-        throw new Error(`Failed to ${action} request (${response.status})`);
+        throw new Error();
       }
 
       setAdminSuccess(
@@ -1101,12 +1107,8 @@ export default function Home() {
           : "Request rejected successfully.",
       );
       await loadAdminDashboardData();
-    } catch (error) {
-      setAdminError(
-        error instanceof Error
-          ? error.message
-          : "Could not update this request.",
-      );
+    } catch (_error) {
+      setAdminError(ERROR_MESSAGES.action);
     } finally {
       setAdminActionUserId("");
     }
@@ -1115,7 +1117,7 @@ export default function Home() {
   async function handleRemoveMentorAccess(mentorId) {
     const token = window.localStorage.getItem("ocgoAccessToken");
     if (!token) {
-      setAdminError("Missing access token. Please sign in again.");
+      setAdminError("Your session ended. Please sign in again.");
       return;
     }
 
@@ -1136,30 +1138,187 @@ export default function Home() {
       );
 
       if (!response.ok) {
-        throw new Error(`Failed to remove mentor access (${response.status})`);
+        throw new Error();
       }
 
       setAdminSuccess("Volunteer listing and access removed.");
       setAdminSelectedMentor(null);
       setAdminSelectedMentorRequests([]);
       await loadAdminDashboardData();
-    } catch (error) {
-      setAdminError(
-        error instanceof Error
-          ? error.message
-          : "Could not remove mentor access.",
-      );
+    } catch (_error) {
+      setAdminError(ERROR_MESSAGES.action);
     } finally {
       setAdminActionUserId("");
+    }
+  }
+
+  function resetAdminProfileForm() {
+    setAdminEditingUserId("");
+    setAdminProfileForm({
+      ...EMPTY_ADMIN_PROFILE_FORM,
+      university: isSuperAdmin
+        ? ""
+        : profileData?.profile?.university || "",
+    });
+  }
+
+  async function handleCreatePreapprovedEmail(event) {
+    event.preventDefault();
+    const token = window.localStorage.getItem("ocgoAccessToken");
+    if (!token) return;
+
+    setIsAdminInviteSaving(true);
+    setAdminError("");
+    setAdminSuccess("");
+    try {
+      const response = await apiFetch(
+        `${BACKEND_BASE_URL}/api/admin/preapproved-emails`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(adminInviteForm),
+        },
+      );
+      if (!response.ok) {
+        throw new Error();
+      }
+
+      setAdminSuccess("Email preapproved. That signup will be approved automatically.");
+      setAdminInviteForm({
+        ...EMPTY_ADMIN_INVITE_FORM,
+        university: isSuperAdmin
+          ? ""
+          : profileData?.profile?.university || "",
+      });
+      await loadAdminDashboardData();
+    } catch (_error) {
+      setAdminError(ERROR_MESSAGES.action);
+    } finally {
+      setIsAdminInviteSaving(false);
+    }
+  }
+
+  async function handleDeletePreapprovedEmail(entryId) {
+    const token = window.localStorage.getItem("ocgoAccessToken");
+    if (!token) return;
+
+    setAdminError("");
+    setAdminSuccess("");
+    try {
+      const response = await apiFetch(
+        `${BACKEND_BASE_URL}/api/admin/preapproved-emails/${entryId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (!response.ok) {
+        throw new Error();
+      }
+      setAdminSuccess("Preapproved email removed.");
+      await loadAdminDashboardData();
+    } catch (_error) {
+      setAdminError(ERROR_MESSAGES.action);
+    }
+  }
+
+  function startEditingAdminUser(user) {
+    const mentorProfile = Array.isArray(user.mentor_profiles)
+      ? user.mentor_profiles[0]
+      : user.mentor_profiles;
+    const menteeProfile = Array.isArray(user.mentee_profiles)
+      ? user.mentee_profiles[0]
+      : user.mentee_profiles;
+    const availabilityInfo = parseMentorAvailability(
+      mentorProfile?.availability,
+    );
+
+    setAdminEditingUserId(user.id);
+    setAdminProfileForm({
+      ...EMPTY_ADMIN_PROFILE_FORM,
+      role: user.role,
+      username: user.username ?? "",
+      fullName: user.full_name ?? "",
+      university: user.university ?? "",
+      bio: user.bio ?? "",
+      approvalStatus: user.approval_status ?? "pending",
+      isVisible: Boolean(user.is_visible),
+      sameUniversityOnly: user.same_university_only !== false,
+      mentorMode: availabilityInfo.mentorMode,
+      availability: availabilityInfo.availability,
+      goals: menteeProfile?.goals ?? "",
+      interests: (menteeProfile?.interests ?? []).join(", "),
+    });
+  }
+
+  async function handleSaveAdminProfile(event) {
+    event.preventDefault();
+    const token = window.localStorage.getItem("ocgoAccessToken");
+    if (!token) return;
+
+    const values = adminProfileForm;
+    const payload = {
+      role: values.role,
+      username: values.username.trim(),
+      full_name: values.fullName.trim(),
+      university: values.university,
+      bio: values.bio.trim() || null,
+      approval_status: values.approvalStatus,
+      is_visible: values.isVisible,
+      same_university_only: values.sameUniversityOnly,
+      availability: buildMentorAvailability(
+        values.availability,
+        values.mentorMode,
+      ),
+      goals: values.goals.trim() || null,
+      interests: parseCommaSeparated(values.interests),
+    };
+    if (!payload.username) delete payload.username;
+    if (!adminEditingUserId) {
+      payload.email = values.email.trim();
+      payload.password = values.password;
+    }
+
+    setIsAdminProfileSaving(true);
+    setAdminError("");
+    setAdminSuccess("");
+    try {
+      const response = await apiFetch(
+        adminEditingUserId
+          ? `${BACKEND_BASE_URL}/api/admin/users/${adminEditingUserId}`
+          : `${BACKEND_BASE_URL}/api/admin/users`,
+        {
+          method: adminEditingUserId ? "PATCH" : "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        },
+      );
+      if (!response.ok) {
+        throw new Error();
+      }
+
+      setAdminSuccess(
+        adminEditingUserId ? "Profile updated." : "Account and profile created.",
+      );
+      resetAdminProfileForm();
+      await loadAdminDashboardData();
+    } catch (_error) {
+      setAdminError(ERROR_MESSAGES.save);
+    } finally {
+      setIsAdminProfileSaving(false);
     }
   }
 
   async function handleUnlock(event) {
     event.preventDefault();
     if (!hasSupabaseEnv || !supabase) {
-      setAuthError(
-        "Supabase env is missing. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
-      );
+      setAuthError("The service is temporarily unavailable. Please try again later.");
       return;
     }
 
@@ -1193,7 +1352,6 @@ export default function Home() {
       };
 
       if (signupRole === "mentor") {
-        payload.skills = parseCommaSeparated(signupSkills);
         payload.availability = buildMentorAvailability(
           signupAvailability,
           signupMentorMode,
@@ -1218,7 +1376,7 @@ export default function Home() {
       );
 
       if (!response.ok) {
-        throw new Error(`Failed to create profile (${response.status})`);
+        throw new Error();
       }
     }
 
@@ -1236,7 +1394,6 @@ export default function Home() {
         };
 
         if (signupRole === "mentor") {
-          signupMetadata.skills = parseCommaSeparated(signupSkills);
           signupMetadata.availability = buildMentorAvailability(
             signupAvailability,
             signupMentorMode,
@@ -1263,9 +1420,7 @@ export default function Home() {
           await syncSignupProfile(data.session.access_token);
           setAuthSuccess("Account created and profile initialized.");
         } else {
-          setAuthSuccess(
-            "Account created, but email confirmation is still enabled in Supabase. Ask an administrator to disable Confirm email, then sign in.",
-          );
+          setAuthSuccess("Account created. Please check your email before signing in.");
           setAuthMode("signin");
         }
       } else {
@@ -1282,10 +1437,8 @@ export default function Home() {
           setAuthSuccess("Signed in successfully.");
         }
       }
-    } catch (error) {
-      setAuthError(
-        error instanceof Error ? error.message : "Authentication failed.",
-      );
+    } catch (_error) {
+      setAuthError(ERROR_MESSAGES.auth);
     } finally {
       setIsAuthLoading(false);
     }
@@ -1299,7 +1452,7 @@ export default function Home() {
     }
     const token = window.localStorage.getItem("ocgoAccessToken");
     if (!token) {
-      setRequestError("Missing access token. Please sign in again.");
+      setRequestError("Your session ended. Please sign in again.");
       return;
     }
 
@@ -1320,30 +1473,13 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        let detail = "";
-        try {
-          const errorPayload = await response.json();
-          detail =
-            errorPayload?.detail ||
-            errorPayload?.message ||
-            errorPayload?.error ||
-            "";
-        } catch (_error) {
-          detail = "";
-        }
-        throw new Error(
-          detail || `Failed to send match request (${response.status})`,
-        );
+        throw new Error();
       }
 
       await loadMenteeRequestsData();
       setIsMatchSent(true);
-    } catch (error) {
-      setRequestError(
-        error instanceof Error
-          ? error.message
-          : "Could not send the match request. Please try again.",
-      );
+    } catch (_error) {
+      setRequestError(ERROR_MESSAGES.action);
     } finally {
       setIsSendingMatch(false);
     }
@@ -1373,7 +1509,6 @@ export default function Home() {
     setSignupFullName("");
     setSignupUniversity("");
     setSignupBio("");
-    setSignupSkills("");
     setSignupMentorMode("Remote");
     setSignupAvailability("");
     setSignupGoals("");
@@ -1389,8 +1524,8 @@ export default function Home() {
     setSearchQuery("");
     setUniversityFilter("all");
     setAvailabilityFilter("all");
-    setSpecialtyFilter("all");
     setIncludeOtherUniversities(false);
+    setDidAutoExpandUniversitySearch(false);
     setProfileData(null);
     setIsProfileLoading(false);
     setIsProfileSaving(false);
@@ -1403,6 +1538,13 @@ export default function Home() {
     setAdminMetrics(null);
     setAdminMentors([]);
     setAdminMatches([]);
+    setAdminUsers([]);
+    setAdminPreapprovedEmails([]);
+    setAdminInviteForm(EMPTY_ADMIN_INVITE_FORM);
+    setAdminProfileForm(EMPTY_ADMIN_PROFILE_FORM);
+    setAdminEditingUserId("");
+    setIsAdminInviteSaving(false);
+    setIsAdminProfileSaving(false);
     setAdminMatchStatusFilter("all");
     setAdminSessionEntries([]);
     setAdminSessionsTotal(0);
@@ -1417,7 +1559,7 @@ export default function Home() {
     setIsLoadingAdminMentorDetails(false);
     setAdminMentorDetailsError("");
     setAdminViewMode("admin");
-    setMentorViewMode("directory");
+    setMentorViewMode("requests");
     setMentorRequests([]);
     setIsLoadingMentorRequests(false);
     setMentorRequestsError("");
@@ -1445,7 +1587,7 @@ export default function Home() {
       university: "",
       bio: "",
       isVisible: false,
-      skills: "",
+      sameUniversityOnly: true,
       mentorMode: "Remote",
       availability: "",
       goals: "",
@@ -1683,7 +1825,7 @@ export default function Home() {
                     </p>
                     <div className="mt-5 flex flex-wrap gap-2">
                       <span className="rounded-full border border-[#e8e5dd]/15 px-3 py-1 text-xs font-semibold text-[#c9cbbd]">
-                        Dementia care
+                        Peer support
                       </span>
                       <span className="rounded-full border border-[#e8e5dd]/15 px-3 py-1 text-xs font-semibold text-[#c9cbbd]">
                         Remote
@@ -1946,22 +2088,6 @@ export default function Home() {
                   {signupRole === "mentor" && (
                     <>
                       <label
-                        htmlFor="signup-skills"
-                        className="text-sm font-bold text-[#2a3723]"
-                      >
-                        Skills (comma-separated)
-                      </label>
-                      <input
-                        id="signup-skills"
-                        type="text"
-                        value={signupSkills}
-                        onChange={(event) =>
-                          setSignupSkills(event.target.value)
-                        }
-                        placeholder="Dementia support, Care navigation"
-                        className="rounded-md border border-[#b9bba8] px-4 py-3 outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
-                      />
-                      <label
                         htmlFor="signup-mentor-mode"
                         className="text-sm font-bold text-[#2a3723]"
                       >
@@ -1977,6 +2103,7 @@ export default function Home() {
                       >
                         <option value="Remote">Remote</option>
                         <option value="In person">In person</option>
+                        <option value="Hybrid">Hybrid</option>
                       </select>
                       <label
                         htmlFor="signup-availability"
@@ -2068,19 +2195,26 @@ export default function Home() {
             {!isProfileLoading && profileError && (
               <section className="rounded-lg border border-red-200 bg-red-50 p-6 shadow-sm">
                 <h3 className="text-lg font-bold text-red-900">
-                  Could not load account profile
+                  Something went wrong
                 </h3>
                 <p className="mt-2 text-sm text-red-800">{profileError}</p>
                 <p className="mt-2 text-sm text-red-800">
-                  This usually means your API token is invalid/expired or
-                  backend JWT config is mismatched.
+                  Please retry. If the problem continues, sign out and sign in
+                  again.
                 </p>
                 <button
                   type="button"
-                  onClick={handleStartOver}
+                  onClick={() => window.location.reload()}
                   className="mt-4 rounded-md bg-red-700 px-5 py-2 text-sm font-bold text-white hover:bg-red-800"
                 >
-                  Sign out and try again
+                  Retry connection
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStartOver}
+                  className="ml-3 mt-4 rounded-md border border-red-300 px-5 py-2 text-sm font-bold text-red-800 hover:bg-red-100"
+                >
+                  Sign out
                 </button>
               </section>
             )}
@@ -2101,42 +2235,9 @@ export default function Home() {
               </section>
             )}
 
-            {!isProfileLoading &&
-              !profileError &&
-              !isAdmin &&
-              !profileForm.university && (
-                <section className="rounded-lg border border-[#e6c766] bg-[#fffbea] p-6 shadow-sm">
-                  <h3 className="text-xl font-bold text-[#59470a]">
-                    Select your university
-                  </h3>
-                  <p className="mt-2 text-sm text-[#6f5a14]">
-                    Add your Ontario university before your profile can be
-                    approved or you can browse volunteers.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setIsSettingsOpen(true)}
-                    className="mt-4 rounded-md bg-[#59470a] px-5 py-2 text-sm font-bold text-white hover:bg-[#443605]"
-                  >
-                    Open settings
-                  </button>
-                </section>
-              )}
-
             {!isProfileLoading && !profileError && isApprovedMentor && (
               <nav className="workspace-tabs" aria-label="Volunteer workspace">
                 <div className="inline-flex p-1">
-                  <button
-                    type="button"
-                    onClick={() => setMentorViewMode("directory")}
-                    className={`rounded-md px-4 py-2 text-sm font-semibold ${
-                      mentorViewMode === "directory"
-                        ? "bg-[#2a3723] text-white shadow-sm"
-                        : "text-[#2a3723] hover:bg-white/60"
-                    }`}
-                  >
-                    Volunteer directory
-                  </button>
                   <button
                     type="button"
                     onClick={() => setMentorViewMode("requests")}
@@ -2618,11 +2719,28 @@ export default function Home() {
                       Admin dashboard
                     </h3>
                     <p className="mt-1 text-sm text-[#59604f]">
-                      Review applications and monitor active support.
+                      {isSuperAdmin
+                        ? "Super-admin workspace across all Ontario universities."
+                        : `${formatUniversity(profileData?.profile?.university)} workspace. Review applications and monitor active support.`}
                     </p>
                   </div>
                 </div>
 
+                {!hasAdminUniversityScope && (
+                  <section className="mt-8 rounded-lg border border-[#d4bd92] bg-[#f5ecdf] p-6">
+                    <h4 className="text-xl font-extrabold text-[#0c0a08]">
+                      University assignment required
+                    </h4>
+                    <p className="mt-2 max-w-3xl text-sm leading-6 text-[#59604f]">
+                      This admin account cannot access applications or member
+                      records until the super-admin assigns it an Ontario
+                      university.
+                    </p>
+                  </section>
+                )}
+
+                {hasAdminUniversityScope && (
+                  <>
                 {isAdminLoading && (
                   <p className="mt-4 text-sm text-[#59604f]">
                     Loading admin dashboard...
@@ -2675,6 +2793,431 @@ export default function Home() {
                     </article>
                   </div>
                 )}
+
+                <section className="admin-section mt-10 border-t border-[#d3d1c8] pt-9">
+                  <div>
+                    <h4 className="text-2xl font-extrabold text-[#0c0a08]">
+                      Preapproved signup emails
+                    </h4>
+                    <p className="mt-2 text-base text-[#59604f]">
+                      People who sign up with an email below are approved for
+                      the selected role and university automatically.
+                    </p>
+                  </div>
+                  <form
+                    className="mt-6 grid gap-4 lg:grid-cols-[1.4fr_1fr_1.4fr_auto] lg:items-end"
+                    onSubmit={handleCreatePreapprovedEmail}
+                  >
+                    <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                      Email
+                      <input
+                        type="email"
+                        required
+                        value={adminInviteForm.email}
+                        onChange={(event) =>
+                          setAdminInviteForm((current) => ({
+                            ...current,
+                            email: event.target.value,
+                          }))
+                        }
+                        placeholder="person@example.com"
+                        className="rounded-md border border-[#b9bba8] bg-white px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                      Account type
+                      <select
+                        value={adminInviteForm.role}
+                        onChange={(event) =>
+                          setAdminInviteForm((current) => ({
+                            ...current,
+                            role: event.target.value,
+                          }))
+                        }
+                        className="rounded-md border border-[#b9bba8] bg-white px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
+                      >
+                        <option value="mentor">Volunteer</option>
+                        <option value="mentee">Caregiver</option>
+                      </select>
+                    </label>
+                    <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                      University
+                      <select
+                        required
+                        disabled={!isSuperAdmin}
+                        value={adminInviteForm.university}
+                        onChange={(event) =>
+                          setAdminInviteForm((current) => ({
+                            ...current,
+                            university: event.target.value,
+                          }))
+                        }
+                        className="rounded-md border border-[#b9bba8] bg-white px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] disabled:bg-[#f0f1eb] focus:border-[#2a3723] focus:ring-2"
+                      >
+                        <option value="">Select university</option>
+                        {ONTARIO_UNIVERSITIES.map((university) => (
+                          <option key={`invite-${university}`} value={university}>
+                            {university}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="submit"
+                      disabled={isAdminInviteSaving}
+                      className="rounded-md bg-[#2a3723] px-5 py-3 text-sm font-bold text-white enabled:hover:bg-[#1f2b1b] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isAdminInviteSaving ? "Adding..." : "Preapprove"}
+                    </button>
+                  </form>
+
+                  {adminPreapprovedEmails.length === 0 ? (
+                    <p className="mt-5 border-y border-[#d3d1c8] py-4 text-sm text-[#59604f]">
+                      No preapproved emails yet.
+                    </p>
+                  ) : (
+                    <div className="mt-6 divide-y divide-[#d3d1c8] border-y border-[#d3d1c8]">
+                      {adminPreapprovedEmails.map((entry) => (
+                        <div
+                          key={entry.id}
+                          className="flex flex-wrap items-center justify-between gap-4 py-4"
+                        >
+                          <div>
+                            <p className="font-bold text-[#0c0a08]">{entry.email}</p>
+                            <p className="mt-1 text-sm text-[#59604f]">
+                              {entry.role === "mentor" ? "Volunteer" : "Caregiver"} · {formatUniversity(entry.university)} · {entry.claimed_at ? "Account created" : "Waiting for signup"}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePreapprovedEmail(entry.id)}
+                            className="rounded-md border border-[#c98484] px-3 py-2 text-sm font-bold text-[#8f2525] hover:bg-[#fff2f2]"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                <section className="admin-section mt-10 border-t border-[#d3d1c8] pt-9">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <h4 className="text-2xl font-extrabold text-[#0c0a08]">
+                        Profile management
+                      </h4>
+                      <p className="mt-2 text-base text-[#59604f]">
+                        Create accounts or edit any profile in your admin scope.
+                      </p>
+                    </div>
+                    {adminEditingUserId && (
+                      <button
+                        type="button"
+                        onClick={resetAdminProfileForm}
+                        className="rounded-md border border-[#b9bba8] px-4 py-2 text-sm font-bold text-[#2a3723] hover:bg-[#f0f1eb]"
+                      >
+                        Cancel editing
+                      </button>
+                    )}
+                  </div>
+
+                  <form
+                    className="mt-6 grid gap-5 border-y border-[#d3d1c8] py-6 md:grid-cols-2"
+                    onSubmit={handleSaveAdminProfile}
+                  >
+                    {!adminEditingUserId && (
+                      <>
+                        <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                          Login email
+                          <input
+                            type="email"
+                            required
+                            value={adminProfileForm.email}
+                            onChange={(event) =>
+                              setAdminProfileForm((current) => ({
+                                ...current,
+                                email: event.target.value,
+                              }))
+                            }
+                            className="rounded-md border border-[#b9bba8] px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
+                          />
+                        </label>
+                        <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                          Temporary password
+                          <input
+                            type="password"
+                            minLength={8}
+                            required
+                            value={adminProfileForm.password}
+                            onChange={(event) =>
+                              setAdminProfileForm((current) => ({
+                                ...current,
+                                password: event.target.value,
+                              }))
+                            }
+                            className="rounded-md border border-[#b9bba8] px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
+                          />
+                        </label>
+                      </>
+                    )}
+                    <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                      Role
+                      <select
+                        disabled={Boolean(adminEditingUser?.is_super_admin)}
+                        value={adminProfileForm.role}
+                        onChange={(event) =>
+                          setAdminProfileForm((current) => ({
+                            ...current,
+                            role: event.target.value,
+                            approvalStatus:
+                              event.target.value === "admin"
+                                ? "approved"
+                                : current.approvalStatus,
+                          }))
+                        }
+                        className="rounded-md border border-[#b9bba8] bg-white px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] disabled:bg-[#f0f1eb] focus:border-[#2a3723] focus:ring-2"
+                      >
+                        <option value="mentor">Volunteer</option>
+                        <option value="mentee">Caregiver</option>
+                        {isSuperAdmin && <option value="admin">Admin</option>}
+                      </select>
+                    </label>
+                    <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                      Approval status
+                      <select
+                        disabled={adminProfileForm.role === "admin"}
+                        value={adminProfileForm.approvalStatus}
+                        onChange={(event) =>
+                          setAdminProfileForm((current) => ({
+                            ...current,
+                            approvalStatus: event.target.value,
+                          }))
+                        }
+                        className="rounded-md border border-[#b9bba8] bg-white px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] disabled:bg-[#f0f1eb] focus:border-[#2a3723] focus:ring-2"
+                      >
+                        <option value="approved">Approved</option>
+                        <option value="pending">Pending</option>
+                        <option value="rejected">Rejected</option>
+                      </select>
+                    </label>
+                    <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                      Username
+                      <input
+                        required
+                        minLength={3}
+                        maxLength={30}
+                        pattern="[A-Za-z0-9_]+"
+                        value={adminProfileForm.username}
+                        onChange={(event) =>
+                          setAdminProfileForm((current) => ({
+                            ...current,
+                            username: event.target.value,
+                          }))
+                        }
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                      Full name
+                      <input
+                        required
+                        value={adminProfileForm.fullName}
+                        onChange={(event) =>
+                          setAdminProfileForm((current) => ({
+                            ...current,
+                            fullName: event.target.value,
+                          }))
+                        }
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                      University
+                      <select
+                        required
+                        disabled={!isSuperAdmin}
+                        value={adminProfileForm.university}
+                        onChange={(event) =>
+                          setAdminProfileForm((current) => ({
+                            ...current,
+                            university: event.target.value,
+                          }))
+                        }
+                        className="rounded-md border border-[#b9bba8] bg-white px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] disabled:bg-[#f0f1eb] focus:border-[#2a3723] focus:ring-2"
+                      >
+                        <option value="">Select university</option>
+                        {ONTARIO_UNIVERSITIES.map((university) => (
+                          <option key={`managed-${university}`} value={university}>
+                            {university}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="grid gap-2 text-sm font-bold text-[#2a3723] md:col-span-2">
+                      Bio
+                      <textarea
+                        rows={3}
+                        value={adminProfileForm.bio}
+                        onChange={(event) =>
+                          setAdminProfileForm((current) => ({
+                            ...current,
+                            bio: event.target.value,
+                          }))
+                        }
+                        className="rounded-md border border-[#b9bba8] px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
+                      />
+                    </label>
+
+                    {adminProfileForm.role === "mentor" && (
+                      <>
+                        <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                          Support format
+                          <select
+                            value={adminProfileForm.mentorMode}
+                            onChange={(event) =>
+                              setAdminProfileForm((current) => ({
+                                ...current,
+                                mentorMode: event.target.value,
+                              }))
+                            }
+                            className="rounded-md border border-[#b9bba8] bg-white px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
+                          >
+                            <option value="Remote">Remote</option>
+                            <option value="In person">In person</option>
+                            <option value="Hybrid">Hybrid</option>
+                          </select>
+                        </label>
+                        <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                          Availability
+                          <input
+                            value={adminProfileForm.availability}
+                            onChange={(event) =>
+                              setAdminProfileForm((current) => ({
+                                ...current,
+                                availability: event.target.value,
+                              }))
+                            }
+                            placeholder="Weekday evenings"
+                            className="rounded-md border border-[#b9bba8] px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
+                          />
+                        </label>
+                        <label className="flex items-center gap-3 text-sm font-bold text-[#2a3723]">
+                          <input
+                            type="checkbox"
+                            checked={adminProfileForm.isVisible}
+                            onChange={(event) =>
+                              setAdminProfileForm((current) => ({
+                                ...current,
+                                isVisible: event.target.checked,
+                              }))
+                            }
+                          />
+                          Accepting new matches
+                        </label>
+                        <label className="flex items-center gap-3 text-sm font-bold text-[#2a3723]">
+                          <input
+                            type="checkbox"
+                            checked={adminProfileForm.sameUniversityOnly}
+                            onChange={(event) =>
+                              setAdminProfileForm((current) => ({
+                                ...current,
+                                sameUniversityOnly: event.target.checked,
+                              }))
+                            }
+                          />
+                          Only visible to caregivers at this university
+                        </label>
+                      </>
+                    )}
+
+                    {adminProfileForm.role === "mentee" && (
+                      <>
+                        <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                          Support goals
+                          <textarea
+                            rows={3}
+                            value={adminProfileForm.goals}
+                            onChange={(event) =>
+                              setAdminProfileForm((current) => ({
+                                ...current,
+                                goals: event.target.value,
+                              }))
+                            }
+                            className="rounded-md border border-[#b9bba8] px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
+                          />
+                        </label>
+                        <label className="grid gap-2 text-sm font-bold text-[#2a3723]">
+                          Interests
+                          <textarea
+                            rows={3}
+                            value={adminProfileForm.interests}
+                            onChange={(event) =>
+                              setAdminProfileForm((current) => ({
+                                ...current,
+                                interests: event.target.value,
+                              }))
+                            }
+                            placeholder="Comma-separated"
+                            className="rounded-md border border-[#b9bba8] px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] focus:border-[#2a3723] focus:ring-2"
+                          />
+                        </label>
+                      </>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={isAdminProfileSaving}
+                      className="w-fit rounded-md bg-[#0c0a08] px-5 py-3 text-sm font-bold text-white enabled:hover:bg-[#2a3723] disabled:cursor-not-allowed disabled:opacity-60 md:col-span-2"
+                    >
+                      {isAdminProfileSaving
+                        ? "Saving..."
+                        : adminEditingUserId
+                          ? "Save profile changes"
+                          : "Create account"}
+                    </button>
+                  </form>
+
+                  <div className="mt-6 overflow-x-auto">
+                    <table className="w-full min-w-[720px] border-collapse text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-[#b9bba8] text-xs font-bold uppercase text-[#2a3723]">
+                          <th className="px-3 py-3">Name</th>
+                          <th className="px-3 py-3">Role</th>
+                          <th className="px-3 py-3">University</th>
+                          <th className="px-3 py-3">Status</th>
+                          <th className="px-3 py-3"><span className="sr-only">Actions</span></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminUsers.map((user) => (
+                          <tr key={`managed-${user.id}`} className="border-b border-[#dfddd5]">
+                            <td className="px-3 py-4 font-bold text-[#0c0a08]">
+                              {user.full_name || "Unnamed profile"}
+                              {user.is_super_admin && (
+                                <span className="ml-2 rounded bg-[#dfe2d5] px-2 py-1 text-xs text-[#2a3723]">
+                                  Super-admin
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3 py-4 capitalize text-[#41473b]">{user.role}</td>
+                            <td className="px-3 py-4 text-[#41473b]">{formatUniversity(user.university)}</td>
+                            <td className="px-3 py-4 text-[#41473b]">{user.approval_status}</td>
+                            <td className="px-3 py-4 text-right">
+                              <button
+                                type="button"
+                                onClick={() => startEditingAdminUser(user)}
+                                className="rounded-md border border-[#b9bba8] px-3 py-2 font-bold text-[#2a3723] hover:bg-[#f0f1eb]"
+                              >
+                                Edit
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
 
                 <section className="admin-section mt-10 border-t border-[#d3d1c8] pt-9">
                   <div className="flex flex-wrap items-end justify-between gap-4">
@@ -2923,14 +3466,6 @@ export default function Home() {
 
                             {user.role === "mentor" && (
                               <>
-                                <p className="md:col-span-2">
-                                  <span className="font-bold">Skills:</span>{" "}
-                                  {(
-                                    (Array.isArray(user.mentor_profiles)
-                                      ? user.mentor_profiles[0]?.skills
-                                      : user.mentor_profiles?.skills) ?? []
-                                  ).join(", ") || "Not provided"}
-                                </p>
                                 <p>
                                   <span className="font-bold">
                                     Availability:
@@ -3086,14 +3621,6 @@ export default function Home() {
                             {user.role === "mentor" && (
                               <>
                                 <p>
-                                  <span className="font-bold">Skills:</span>{" "}
-                                  {(
-                                    (Array.isArray(user.mentor_profiles)
-                                      ? user.mentor_profiles[0]?.skills
-                                      : user.mentor_profiles?.skills) ?? []
-                                  ).join(", ") || "Not provided"}
-                                </p>
-                                <p>
                                   <span className="font-bold">
                                     Availability:
                                   </span>{" "}
@@ -3164,8 +3691,14 @@ export default function Home() {
                               {mentor.full_name || "Unnamed volunteer"}
                             </p>
                             <p className="mt-1 text-sm text-[#59604f]">
-                              Visibility:{" "}
-                              {mentor.is_visible ? "Visible" : "Hidden"}
+                              Accepting new matches:{" "}
+                              {mentor.is_visible ? "Yes" : "No"}
+                            </p>
+                            <p className="mt-1 text-sm text-[#59604f]">
+                              Audience:{" "}
+                              {mentor.same_university_only
+                                ? "Same university only"
+                                : "All Ontario universities"}
                             </p>
                             <p className="mt-1 text-sm font-semibold text-[#2a3723]">
                               {formatUniversity(mentor.university)}
@@ -3212,8 +3745,14 @@ export default function Home() {
                             <p className="text-sm text-[#59604f]">
                               Status: {adminSelectedMentor.approval_status} -{" "}
                               {adminSelectedMentor.is_visible
-                                ? "Visible"
-                                : "Hidden"}
+                                ? "Accepting new matches"
+                                : "Not accepting new matches"}
+                            </p>
+                            <p className="mt-1 text-sm text-[#59604f]">
+                              Audience:{" "}
+                              {adminSelectedMentor.same_university_only
+                                ? "Same university only"
+                                : "All Ontario universities"}
                             </p>
                             <p className="mt-1 text-sm font-semibold text-[#2a3723]">
                               {formatUniversity(
@@ -3239,17 +3778,6 @@ export default function Home() {
                           </div>
                           <p className="text-sm text-[#41473b]">
                             {adminSelectedMentor.bio || "No bio provided."}
-                          </p>
-                          <p className="text-sm text-[#41473b]">
-                            <span className="font-bold">Skills:</span>{" "}
-                            {(
-                              (Array.isArray(
-                                adminSelectedMentor.mentor_profiles,
-                              )
-                                ? adminSelectedMentor.mentor_profiles[0]?.skills
-                                : adminSelectedMentor.mentor_profiles
-                                    ?.skills) ?? []
-                            ).join(", ") || "Not set"}
                           </p>
                           <p className="text-sm text-[#41473b]">
                             <span className="font-bold">Availability:</span>{" "}
@@ -3305,25 +3833,23 @@ export default function Home() {
                     </section>
                   </div>
                 </div>
+                  </>
+                )}
               </section>
             )}
 
-            {(showMenteeExperience || showMentorDirectory) && (
+            {showMenteeExperience && (
               <>
                 <section className="rounded-lg border border-[#b9bba8] bg-white p-6 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <h3 className="workspace-heading text-2xl font-bold text-[#0c0a08]">
-                        {showMentorDirectory
-                          ? "Volunteer directory"
-                          : "Browse volunteers"}
+                        Browse volunteers
                       </h3>
                       <p className="mt-1 text-sm text-[#59604f]">
-                        {showMentorDirectory
-                          ? `Approved volunteers at ${profileForm.university || "your university"}.`
-                          : includeOtherUniversities
-                            ? "Select from available volunteers across Ontario universities."
-                            : `Showing available volunteers at ${profileForm.university || "your university"}.`}
+                        {includeOtherUniversities
+                          ? "Select from available volunteers across Ontario universities."
+                          : `Showing available volunteers at ${profileForm.university || "your university"}.`}
                       </p>
                     </div>
                     <p className="rounded-md bg-[#dfe2d5] px-4 py-2 text-xs font-bold text-[#2a3723]">
@@ -3332,7 +3858,7 @@ export default function Home() {
                   </div>
                   {isLoadingVolunteers && (
                     <p className="mt-3 text-sm text-[#59604f]">
-                      Loading volunteers from backend...
+                      Loading volunteers...
                     </p>
                   )}
                   {volunteerLoadError && (
@@ -3341,14 +3867,21 @@ export default function Home() {
                     </p>
                   )}
 
-                  <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  {didAutoExpandUniversitySearch && includeOtherUniversities && (
+                    <p className="mt-4 rounded-md border border-[#d3d1c8] bg-[#f5f3ed] px-4 py-3 text-sm text-[#41473b]">
+                      No available volunteers were found at your university, so
+                      the directory was expanded to all Ontario universities.
+                    </p>
+                  )}
+
+                  <div className="mt-5 grid gap-4 md:grid-cols-3">
                     <label className="flex flex-col gap-2 text-xs font-semibold text-[#59604f]">
                       Search
                       <input
                         type="text"
                         value={searchQuery}
                         onChange={(event) => setSearchQuery(event.target.value)}
-                        placeholder="Name or specialty"
+                        placeholder="Name, university, or support format"
                         className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm font-normal text-[#0c0a08] outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       />
                     </label>
@@ -3387,23 +3920,6 @@ export default function Home() {
                         ))}
                       </select>
                     </label>
-                    <label className="flex flex-col gap-2 text-xs font-semibold text-[#59604f]">
-                      Specialty
-                      <select
-                        value={specialtyFilter}
-                        onChange={(event) =>
-                          setSpecialtyFilter(event.target.value)
-                        }
-                        className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm font-normal text-[#0c0a08] outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
-                      >
-                        <option value="all">All specialties</option>
-                        {specialtyOptions.map((specialty) => (
-                          <option key={specialty} value={specialty}>
-                            {specialty}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
                   </div>
                   {isApprovedMentee && (
                     <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-md border border-[#b9bba8] bg-[#f5f3ed] px-4 py-3 text-sm font-semibold text-[#2a3723]">
@@ -3412,6 +3928,7 @@ export default function Home() {
                         checked={includeOtherUniversities}
                         onChange={(event) => {
                           setIncludeOtherUniversities(event.target.checked);
+                          setDidAutoExpandUniversitySearch(false);
                           setUniversityFilter("all");
                           setSelectedVolunteerId("");
                         }}
@@ -3440,7 +3957,7 @@ export default function Home() {
                               {volunteer.name}
                             </h4>
                             <p className="text-sm text-[#59604f]">
-                              {volunteer.pronouns} | {volunteer.city}
+                              {volunteer.city}
                             </p>
                             <p className="mt-1 text-sm font-semibold text-[#2a3723]">
                               {volunteer.university}
@@ -3456,22 +3973,6 @@ export default function Home() {
                         <p className="mb-4 text-sm leading-6 text-[#41473b]">
                           {volunteer.bio}
                         </p>
-
-                        <div className="mb-3 flex flex-wrap gap-2">
-                          {volunteer.languages.map((language) => (
-                            <Pill key={`${volunteer.id}-lang-${language}`}>
-                              {language}
-                            </Pill>
-                          ))}
-                        </div>
-
-                        <div className="mb-4 flex flex-wrap gap-2">
-                          {volunteer.focus.map((focus) => (
-                            <Pill key={`${volunteer.id}-focus-${focus}`}>
-                              {focus}
-                            </Pill>
-                          ))}
-                        </div>
 
                         <p className="mb-4 text-sm text-[#41473b]">
                           <span className="font-bold">Availability:</span>{" "}
@@ -3627,9 +4128,6 @@ export default function Home() {
                               </option>
                               <option value="Mental health and emotional support">
                                 Mental health and emotional support
-                              </option>
-                              <option value="Young caregiver support">
-                                Young caregiver support
                               </option>
                               <option value="General caregiving guidance">
                                 General caregiving guidance
@@ -3865,26 +4363,6 @@ export default function Home() {
                     <>
                       <div className="flex flex-col gap-2">
                         <label
-                          htmlFor="profile-skills"
-                          className="text-sm font-bold text-[#2a3723]"
-                        >
-                          Skills (comma-separated)
-                        </label>
-                        <input
-                          id="profile-skills"
-                          type="text"
-                          value={profileForm.skills}
-                          onChange={(event) =>
-                            setProfileForm((current) => ({
-                              ...current,
-                              skills: event.target.value,
-                            }))
-                          }
-                          className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
-                        />
-                      </div>
-                      <div className="flex flex-col gap-2">
-                        <label
                           htmlFor="profile-mentor-mode"
                           className="text-sm font-bold text-[#2a3723]"
                         >
@@ -3903,6 +4381,7 @@ export default function Home() {
                         >
                           <option value="Remote">Remote</option>
                           <option value="In person">In person</option>
+                          <option value="Hybrid">Hybrid</option>
                         </select>
                       </div>
                       <div className="flex flex-col gap-2">
@@ -3943,6 +4422,26 @@ export default function Home() {
                           className="text-sm font-bold text-[#2a3723]"
                         >
                           Accepting new caregiver matches
+                        </label>
+                      </div>
+                      <div className="md:col-span-2 flex items-center gap-2">
+                        <input
+                          id="profile-same-university-only"
+                          type="checkbox"
+                          checked={profileForm.sameUniversityOnly}
+                          onChange={(event) =>
+                            setProfileForm((current) => ({
+                              ...current,
+                              sameUniversityOnly: event.target.checked,
+                            }))
+                          }
+                          className="h-4 w-4 rounded border-[#b9bba8] text-[#2a3723] focus:ring-[#2a3723]"
+                        />
+                        <label
+                          htmlFor="profile-same-university-only"
+                          className="text-sm font-bold text-[#2a3723]"
+                        >
+                          Only show my profile to caregivers at my university
                         </label>
                       </div>
                     </>

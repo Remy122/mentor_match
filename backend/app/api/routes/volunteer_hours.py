@@ -66,10 +66,25 @@ def log_hours(payload: VolunteerHoursPayload, current_user: AuthUser = Depends(r
 def list_hours(current_user: AuthUser = Depends(require_auth)) -> dict[str, Any]:
     supabase = get_supabase_client()
 
-    profile_result = supabase.table("profiles").select("role").eq("id", current_user.id).limit(1).execute()
+    profile_result = (
+        supabase.table("profiles")
+        .select("role,university,approval_status,is_super_admin")
+        .eq("id", current_user.id)
+        .limit(1)
+        .execute()
+    )
     profile = profile_result.data[0] if profile_result.data else None
     if not profile:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
+    if profile.get("approval_status") != "approved" or profile.get("role") not in {
+        "admin",
+        "mentor",
+        "mentee",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="An approved account is required to view volunteer hours.",
+        )
 
     query = supabase.table("volunteer_hours").select("*").order("meeting_date", desc=True)
     if profile["role"] == "admin":
@@ -95,8 +110,19 @@ def list_hours(current_user: AuthUser = Depends(require_auth)) -> dict[str, Any]
     participant_profiles = get_profiles_by_ids(
         supabase,
         participant_ids,
-        "id,full_name",
+        "id,full_name,university",
     )
+
+    if profile["role"] == "admin" and not profile.get("is_super_admin"):
+        admin_university = profile.get("university")
+        entries = [
+            row
+            for row in entries
+            if participant_profiles.get(row.get("mentor_id"), {}).get("university")
+            == admin_university
+            and participant_profiles.get(row.get("mentee_id"), {}).get("university")
+            == admin_university
+        ]
 
     enriched_entries = [
         {

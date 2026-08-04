@@ -13,6 +13,10 @@ class AuthUser(BaseModel):
     id: str
     email: str | None = None
     claims: dict[str, Any] = Field(default_factory=dict)
+    role: str | None = None
+    university: str | None = None
+    approval_status: str | None = None
+    is_super_admin: bool = False
 
 
 def _issuer() -> str:
@@ -109,7 +113,7 @@ def require_admin_role(current_user: AuthUser = Depends(require_auth)) -> AuthUs
     supabase = get_supabase_client()
     result = (
         supabase.table("profiles")
-        .select("role,approval_status")
+        .select("role,university,approval_status,is_super_admin")
         .eq("id", current_user.id)
         .limit(1)
         .execute()
@@ -122,4 +126,11 @@ def require_admin_role(current_user: AuthUser = Depends(require_auth)) -> AuthUs
             detail="Admin role required.",
         )
 
-    return current_user
+    return current_user.model_copy(
+        update={
+            "role": profile.get("role"),
+            "university": profile.get("university"),
+            "approval_status": profile.get("approval_status"),
+            "is_super_admin": bool(profile.get("is_super_admin")),
+        }
+    )

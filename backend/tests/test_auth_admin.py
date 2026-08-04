@@ -100,6 +100,39 @@ def test_auth_update_profile(client, fake_supabase, monkeypatch):
     assert invalid_university.status_code == 422
 
 
+def test_admin_cannot_change_own_university(client, fake_supabase, monkeypatch):
+    _wire_supabase(monkeypatch, fake_supabase)
+    fake_supabase.tables["profiles"] = [
+        {
+            "id": "admin-1",
+            "role": "admin",
+            "username": "admin_one",
+            "full_name": "Admin One",
+            "university": "University of Toronto",
+            "approval_status": "approved",
+            "is_visible": False,
+            "same_university_only": True,
+            "is_super_admin": False,
+        }
+    ]
+    app.dependency_overrides[require_auth] = lambda: AuthUser(
+        id="admin-1",
+        email="admin@example.com",
+        claims={},
+        role="admin",
+        university="University of Toronto",
+        approval_status="approved",
+    )
+
+    response = client.patch(
+        "/api/auth/me",
+        json={"university": "University of Waterloo"},
+    )
+
+    assert response.status_code == 403
+    assert fake_supabase.tables["profiles"][0]["university"] == "University of Toronto"
+
+
 def test_admin_approve_reject_and_remove_access(client, fake_supabase, monkeypatch):
     _wire_supabase(monkeypatch, fake_supabase)
 
@@ -138,6 +171,9 @@ def test_admin_approve_reject_and_remove_access(client, fake_supabase, monkeypat
         id="admin-1",
         email="admin@example.com",
         claims={},
+        role="admin",
+        university="University of Toronto",
+        approval_status="approved",
     )
 
     pending_response = client.get("/api/admin/pending-users")
@@ -188,6 +224,9 @@ def test_large_admin_response_is_compressed(client, fake_supabase, monkeypatch):
         id="admin-1",
         email="admin@example.com",
         claims={},
+        role="admin",
+        approval_status="approved",
+        is_super_admin=True,
     )
 
     response = client.get(
@@ -198,3 +237,122 @@ def test_large_admin_response_is_compressed(client, fake_supabase, monkeypatch):
     assert response.status_code == 200
     assert response.headers["content-encoding"] == "gzip"
     assert len(response.json()["pending_users"]) == 20
+
+
+def test_admin_university_scope_preapprovals_and_profile_management(
+    client, fake_supabase, monkeypatch
+):
+    _wire_supabase(monkeypatch, fake_supabase)
+    fake_supabase.tables["profiles"] = [
+        {
+            "id": "toronto-mentee",
+            "role": "mentee",
+            "username": "toronto_member",
+            "full_name": "Toronto Member",
+            "university": "University of Toronto",
+            "approval_status": "pending",
+            "is_visible": False,
+            "same_university_only": True,
+            "is_super_admin": False,
+            "created_at": "2026-01-01T00:00:00Z",
+        },
+        {
+            "id": "waterloo-mentee",
+            "role": "mentee",
+            "username": "waterloo_member",
+            "full_name": "Waterloo Member",
+            "university": "University of Waterloo",
+            "approval_status": "pending",
+            "is_visible": False,
+            "same_university_only": True,
+            "is_super_admin": False,
+            "created_at": "2026-01-02T00:00:00Z",
+        },
+    ]
+
+    app.dependency_overrides[require_admin_role] = lambda: AuthUser(
+        id="admin-toronto",
+        email="admin@toronto.example",
+        claims={},
+        role="admin",
+        university="University of Toronto",
+        approval_status="approved",
+        is_super_admin=False,
+    )
+
+    scoped_pending = client.get("/api/admin/pending-users")
+    assert scoped_pending.status_code == 200
+    assert [row["id"] for row in scoped_pending.json()["pending_users"]] == [
+        "toronto-mentee"
+    ]
+
+    cross_university_invite = client.post(
+        "/api/admin/preapproved-emails",
+        json={
+            "email": "member@waterloo.example",
+            "role": "mentor",
+            "university": "University of Waterloo",
+        },
+    )
+    assert cross_university_invite.status_code == 403
+
+    invite = client.post(
+        "/api/admin/preapproved-emails",
+        json={
+            "email": "member@toronto.example",
+            "role": "mentor",
+            "university": "University of Toronto",
+        },
+    )
+    assert invite.status_code == 200
+    assert invite.json()["preapproved_email"]["email"] == "member@toronto.example"
+
+    normal_admin_create_admin = client.post(
+        "/api/admin/users",
+        json={
+            "email": "another-admin@example.com",
+            "password": "Temporary123!",
+            "role": "admin",
+            "username": "another_admin",
+            "full_name": "Another Admin",
+            "university": "University of Toronto",
+        },
+    )
+    assert normal_admin_create_admin.status_code == 403
+
+    cross_university_edit = client.patch(
+        "/api/admin/users/waterloo-mentee",
+        json={"full_name": "Blocked Edit"},
+    )
+    assert cross_university_edit.status_code == 404
+
+    own_university_edit = client.patch(
+        "/api/admin/users/toronto-mentee",
+        json={"full_name": "Updated Toronto Member"},
+    )
+    assert own_university_edit.status_code == 200
+    assert own_university_edit.json()["profile"]["full_name"] == "Updated Toronto Member"
+
+    app.dependency_overrides[require_admin_role] = lambda: AuthUser(
+        id="super-admin",
+        email="jayhung005@gmail.com",
+        claims={},
+        role="admin",
+        university="University of Toronto",
+        approval_status="approved",
+        is_super_admin=True,
+    )
+    created_admin = client.post(
+        "/api/admin/users",
+        json={
+            "email": "new-admin@example.com",
+            "password": "Temporary123!",
+            "role": "admin",
+            "username": "new_admin",
+            "full_name": "New Admin",
+            "university": "University of Waterloo",
+        },
+    )
+    assert created_admin.status_code == 200
+    assert created_admin.json()["profile"]["role"] == "admin"
+    assert created_admin.json()["profile"]["is_super_admin"] is False

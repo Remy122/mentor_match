@@ -27,7 +27,7 @@ export function parseMentorAvailability(rawAvailability) {
 
   const [modeCandidate, ...rest] = normalized.split("::");
   const mode = modeCandidate?.trim();
-  if (mode === "Remote" || mode === "In person") {
+  if (["Remote", "In person", "Hybrid"].includes(mode)) {
     return {
       mentorMode: mode,
       availability: rest.join("::").trim(),
@@ -42,7 +42,9 @@ export function parseMentorAvailability(rawAvailability) {
 
 export function buildMentorAvailability(availability, mentorMode) {
   const cleanAvailability = (availability ?? "").trim();
-  const cleanMode = mentorMode === "In person" ? "In person" : "Remote";
+  const cleanMode = ["Remote", "In person", "Hybrid"].includes(mentorMode)
+    ? mentorMode
+    : "Remote";
   return cleanAvailability ? `${cleanMode} :: ${cleanAvailability}` : cleanMode;
 }
 
@@ -63,10 +65,7 @@ export function normalizeMentor(mentor) {
     id: mentor.id,
     name: mentor.full_name ?? "Unnamed volunteer",
     university: formatUniversity(mentor.university),
-    pronouns: "N/A",
     city: availabilityInfo.mentorMode,
-    languages: [],
-    focus: mentorProfile?.skills ?? [],
     availability: availabilityInfo.availability || "Not listed",
     bio: mentor.bio ?? "No bio provided yet.",
   };
@@ -97,7 +96,6 @@ export function profilePayloadFromMetadata(metadata) {
   };
 
   if (role === "mentor") {
-    payload.skills = Array.isArray(metadata.skills) ? metadata.skills : [];
     payload.availability =
       typeof metadata.availability === "string"
         ? metadata.availability

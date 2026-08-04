@@ -17,18 +17,31 @@ class FakeResponse:
 
 
 class FakeAuthAdmin:
-    def __init__(self, users: dict[str, dict[str, Any]]):
+    def __init__(self, users: dict[str, dict[str, Any]], client: "FakeSupabase"):
         self._users = users
+        self._client = client
 
     def get_user_by_id(self, user_id: str) -> Any:
         user = self._users.get(user_id, {})
         email = user.get("email")
         return type("Result", (), {"user": type("User", (), {"email": email})()})()
 
+    def create_user(self, payload: dict[str, Any]) -> Any:
+        user_id = f"auth-{self._client.next_id('auth_users')}"
+        self._users[user_id] = {
+            "email": payload.get("email"),
+            "user_metadata": payload.get("user_metadata") or {},
+        }
+        user = type("User", (), {"id": user_id, "email": payload.get("email")})()
+        return type("Result", (), {"user": user})()
+
+    def delete_user(self, user_id: str) -> None:
+        self._users.pop(user_id, None)
+
 
 class FakeAuth:
-    def __init__(self, users: dict[str, dict[str, Any]]):
-        self.admin = FakeAuthAdmin(users)
+    def __init__(self, users: dict[str, dict[str, Any]], client: "FakeSupabase"):
+        self.admin = FakeAuthAdmin(users, client)
 
 
 class FakeQuery:
@@ -76,6 +89,10 @@ class FakeQuery:
     def upsert(self, payload: dict[str, Any]) -> "FakeQuery":
         self._operation = "upsert"
         self._payload = payload
+        return self
+
+    def delete(self) -> "FakeQuery":
+        self._operation = "delete"
         return self
 
     def _apply_filters(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -129,6 +146,13 @@ class FakeQuery:
             table.append(payload)
             return FakeResponse(data=[deepcopy(payload)])
 
+        if self._operation == "delete":
+            deleted = [deepcopy(row) for row in filtered]
+            self.client.tables[self.table_name] = [
+                row for row in table if row not in filtered
+            ]
+            return FakeResponse(data=deleted)
+
         selected = deepcopy(filtered)
         if self._order_by:
             field, desc = self._order_by
@@ -147,10 +171,15 @@ class FakeSupabase:
             "mentee_profiles": [],
             "matches": [],
             "volunteer_hours": [],
+            "preapproved_emails": [],
         }
         self.users: dict[str, dict[str, Any]] = {}
-        self._counters: dict[str, int] = {"matches": 1, "volunteer_hours": 1}
-        self.auth = FakeAuth(self.users)
+        self._counters: dict[str, int] = {
+            "auth_users": 1,
+            "matches": 1,
+            "volunteer_hours": 1,
+        }
+        self.auth = FakeAuth(self.users, self)
 
     def table(self, table_name: str) -> FakeQuery:
         return FakeQuery(self, table_name)
@@ -171,4 +200,3 @@ def client() -> TestClient:
 @pytest.fixture
 def fake_supabase() -> FakeSupabase:
     return FakeSupabase()
-
