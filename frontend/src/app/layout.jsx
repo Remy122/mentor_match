@@ -13,9 +13,12 @@ const fraunces = Fraunces({
 });
 
 export const metadata = {
-  title: "Caregiver Volunteer Matching | Peer Support Portal",
+  title: "QYCC — Peer Support for Young Caregivers",
   description:
-    "University-based peer support matching for caregivers and trained volunteers.",
+    "Young caregivers connect with trained peer support volunteers who understand caregiving, campus life, and the realities of balancing both.",
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+  },
 };
 
 export default function RootLayout({ children }) {

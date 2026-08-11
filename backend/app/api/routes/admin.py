@@ -1,4 +1,5 @@
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -62,6 +63,13 @@ def _scope_profile_query(query: Any, admin_user: AuthUser) -> Any:
     return query.eq("university", university).in_("role", ["mentor", "mentee"])
 
 
+def _scope_program_application_query(query: Any, admin_user: AuthUser) -> Any:
+    if admin_user.is_super_admin:
+        return query
+    university = _scoped_university(admin_user)
+    return query.eq("university", university)
+
+
 def _get_managed_profile(
     supabase: Any,
     user_id: str,
@@ -113,6 +121,69 @@ def get_pending_users(
     )
     result = _scope_profile_query(query, admin_user).order("created_at", desc=False).execute()
     return {"pending_users": result.data or []}
+
+
+@router.get("/program-applications")
+def get_program_applications(
+    review_state: Literal["pending", "reviewed", "all"] = "pending",
+    admin_user: AuthUser = Depends(require_admin_role),
+) -> dict[str, list[dict[str, Any]]]:
+    supabase = get_supabase_client()
+    query = supabase.table("program_applications").select("*")
+    if review_state == "pending":
+        query = query.in_("status", ["pending", "reviewing"])
+    elif review_state == "reviewed":
+        query = query.in_("status", ["approved", "rejected", "withdrawn"])
+
+    result = (
+        _scope_program_application_query(query, admin_user)
+        .order("created_at", desc=review_state != "pending")
+        .execute()
+    )
+    return {"applications": result.data or []}
+
+
+@router.post("/program-applications/{application_id}/{action}")
+def review_program_application(
+    application_id: str,
+    action: Literal["approve", "reject"],
+    admin_user: AuthUser = Depends(require_admin_role),
+) -> dict[str, Any]:
+    supabase = get_supabase_client()
+    query = (
+        supabase.table("program_applications")
+        .select("*")
+        .eq("id", application_id)
+    )
+    result = (
+        _scope_program_application_query(query, admin_user)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found.",
+        )
+
+    next_status = "approved" if action == "approve" else "rejected"
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    update_result = (
+        supabase.table("program_applications")
+        .update(
+            {
+                "status": next_status,
+                "reviewed_by": admin_user.id,
+                "reviewed_at": reviewed_at,
+            }
+        )
+        .eq("id", application_id)
+        .execute()
+    )
+    return {
+        "message": f"Application {next_status}.",
+        "application": (update_result.data or [result.data[0]])[0],
+    }
 
 
 @router.get("/reviewed-users")

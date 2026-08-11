@@ -24,11 +24,14 @@ FastAPI service for the OCGO caregiver and volunteer matching portal.
 1. Apply the SQL files in `migrations/` in numeric order. Migration `005` adds
    university-scoped admins, volunteer audience controls, and preapproved
    emails. Migration `006` keeps the designated super-admin stable after
-   account resets and future signups.
+   account resets and future signups. Migration `007` adds the private
+   caregiver and volunteer application table used by the public forms.
 2. Create and activate a virtual environment.
 3. Install dependencies:
    - `pip install -r requirements.txt`
 4. Copy env template:
    - `copy .env.example .env`
+   - Set `SUPABASE_SERVICE_ROLE_KEY` so the backend can write public form
+     submissions to the RLS-protected application table.
 5. Start dev server:
    - `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`

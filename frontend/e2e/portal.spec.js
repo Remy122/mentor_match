@@ -188,6 +188,58 @@ async function installPortalMocks(
       interests: ["Burnout prevention"],
     },
   };
+  const pendingVolunteerApplication = {
+    id: "program-volunteer-pending",
+    application_type: "volunteer",
+    full_legal_name: "Morgan Elizabeth Volunteer",
+    preferred_name: "Morgan",
+    email: "morgan.volunteer@example.com",
+    phone_number: "647-555-0184",
+    date_of_birth: "2001-09-08",
+    university: "University of Toronto",
+    caregiving_situation: null,
+    support_requested: null,
+    communication_preference: null,
+    accessibility_needs: null,
+    additional_information: null,
+    volunteer_motivation:
+      "I want other young caregivers to feel understood and less alone.",
+    caregiving_experience:
+      "I supported my younger sibling through recurring hospital visits while attending university.",
+    other_relevant_experience:
+      "I facilitate peer wellness workshops and have completed active-listening training.",
+    school_program_interest:
+      "Yes. I would like to help establish a peer support chapter on campus.",
+    consent_acknowledged: true,
+    status: "pending",
+    reviewed_by: null,
+    reviewed_at: null,
+    created_at: CREATED_AT,
+  };
+  const reviewedCaregiverApplication = {
+    id: "program-caregiver-reviewed",
+    application_type: "caregiver",
+    full_legal_name: "Casey Jordan Caregiver",
+    preferred_name: "Casey",
+    email: "casey.caregiver@example.com",
+    phone_number: "416-555-0112",
+    date_of_birth: "2002-04-15",
+    university: "University of Toronto",
+    caregiving_situation: "I care for a parent while balancing school.",
+    support_requested: "Someone who understands burnout and appointments.",
+    communication_preference: "Text",
+    accessibility_needs: "Written summaries after calls.",
+    additional_information: "Weekday evenings work best.",
+    volunteer_motivation: null,
+    caregiving_experience: null,
+    other_relevant_experience: null,
+    school_program_interest: null,
+    consent_acknowledged: true,
+    status: "approved",
+    reviewed_by: "admin-e2e",
+    reviewed_at: CREATED_AT,
+    created_at: CREATED_AT,
+  };
 
   const state = {
     profile: profileFor(role, approvalStatus, isSuperAdmin),
@@ -198,11 +250,16 @@ async function installPortalMocks(
     hourEntries: [],
     pendingAdminUsers: [pendingAdminUser],
     reviewedAdminUsers: [torontoVolunteer],
+    programApplications: [
+      pendingVolunteerApplication,
+      reviewedCaregiverApplication,
+    ],
     adminUsers: [pendingAdminUser, torontoVolunteer],
     preapprovedEmails: [],
     lastMatchRequest: null,
     lastHourEntry: null,
     lastSyncPayload: null,
+    applicationPayloads: [],
     runtimeErrors: [],
     unhandledRoutes: [],
   };
@@ -271,6 +328,12 @@ async function installPortalMocks(
 
     if (method === "OPTIONS") {
       await route.fulfill({ status: 204, headers: CORS_HEADERS });
+      return;
+    }
+
+    if (path === "/api/applications" && method === "POST") {
+      state.applicationPayloads.push(request.postDataJSON());
+      await fulfillJson(route, { message: "Application submitted." }, 201);
       return;
     }
 
@@ -415,6 +478,44 @@ async function installPortalMocks(
       return;
     }
 
+    if (path === "/api/admin/program-applications" && method === "GET") {
+      const reviewState = url.searchParams.get("review_state") || "pending";
+      const applications = state.programApplications.filter((application) => {
+        if (reviewState === "pending") {
+          return ["pending", "reviewing"].includes(application.status);
+        }
+        if (reviewState === "reviewed") {
+          return ["approved", "rejected", "withdrawn"].includes(
+            application.status,
+          );
+        }
+        return true;
+      });
+      await fulfillJson(route, { applications });
+      return;
+    }
+
+    if (
+      /^\/api\/admin\/program-applications\/[^/]+\/(approve|reject)$/.test(path) &&
+      method === "POST"
+    ) {
+      const applicationId = path.split("/")[4];
+      const action = path.split("/")[5];
+      const application = state.programApplications.find(
+        (entry) => entry.id === applicationId,
+      );
+      if (application) {
+        application.status = action === "approve" ? "approved" : "rejected";
+        application.reviewed_by = state.profile.id;
+        application.reviewed_at = CREATED_AT;
+      }
+      await fulfillJson(route, {
+        message: `Application ${application?.status || "updated"}.`,
+        application,
+      });
+      return;
+    }
+
     if (path === "/api/admin/dashboard" && method === "GET") {
       await fulfillJson(route, {
         active_mentors: 1,
@@ -534,7 +635,7 @@ async function installPortalMocks(
 
 async function signIn(page, state) {
   await page.goto("/");
-  await page.locator("header").getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Member sign in", exact: true }).click();
   await page.getByLabel("Email", { exact: true }).fill(state.email);
   await page.getByLabel("Password", { exact: true }).fill("E2ePassword123!");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -553,7 +654,26 @@ async function expectHealthyPage(page, state) {
   expect(state.runtimeErrors).toEqual([]);
 }
 
-test("landing page and signup initialize a university-tagged pending profile", async ({ page }) => {
+test("unknown routes show the branded 404 page and return home", async ({ page }) => {
+  await page.goto("/this-page-does-not-exist");
+  await expect(
+    page.getByRole("heading", { name: "This page wandered off.", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Error 404", { exact: true })).toBeVisible();
+
+  const viewport = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth + 1);
+
+  await page.getByRole("link", { name: "QYCC home", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Peer support, from people who get it." }),
+  ).toBeVisible();
+});
+
+test("public caregiver and volunteer applications match the reference flow", async ({ page }) => {
   const state = await installPortalMocks(page, {
     role: "mentee",
     approvalStatus: "pending",
@@ -561,29 +681,127 @@ test("landing page and signup initialize a university-tagged pending profile", a
 
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Care for the people who care for others." }),
+    page.getByRole("heading", { name: "Peer support, from people who get it." }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Find peer support" }).click();
-  await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Back to home", exact: true }).click();
 
-  await page.getByLabel("I am signing up as").selectOption("mentor");
-  await expect(page.getByLabel("Support format")).toBeVisible();
-  await expect(page.getByLabel("Support format").locator('option[value="Hybrid"]')).toHaveCount(1);
-  await expect(page.getByLabel("Skills")).toHaveCount(0);
-  await page.getByLabel("I am signing up as").selectOption("mentee");
+  await page.getByRole("button", { name: "About", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "About", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What we do", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "QYCC home", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Peer support, from people who get it." }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "About", exact: true }).click();
 
-  await page.getByLabel("Email", { exact: true }).fill("new.caregiver@example.com");
-  await page.getByLabel("Password", { exact: true }).fill("E2ePassword123!");
-  await page.getByLabel("Username", { exact: true }).fill("new_caregiver");
-  await page.getByLabel("Full name", { exact: true }).fill("New Caregiver");
-  await page.getByLabel("Ontario university").selectOption("University of Toronto");
-  await page.getByLabel("Goals").fill("Find peer support close to campus");
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await page.getByRole("button", { name: "Get support", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Get Matched with a Peer Supporter" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Phone number *", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Date of birth *", { exact: true })).toBeVisible();
+  await expect(
+    page.getByLabel("How do you prefer to communicate? *", { exact: true }),
+  ).toBeVisible();
 
-  await expect(page.getByText("Account pending", { exact: true })).toBeVisible();
-  await expect(page.getByText("waiting for admin approval", { exact: false })).toBeVisible();
-  expect(state.lastSyncPayload.university).toBe("University of Toronto");
-  expect(state.lastSyncPayload.role).toBe("mentee");
+  await page.getByRole("button", { name: "Back to home", exact: true }).click();
+  await page.getByRole("button", { name: "For volunteers", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Apply to Be a Peer Support Volunteer" }),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel(
+      "Why are you interested in becoming a peer support volunteer? *",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("Tell us more about your experience as a young caregiver. *", {
+      exact: true,
+    }),
+  ).toBeVisible();
+
+  await page
+    .getByLabel("Full legal name * (Used internally only)", { exact: true })
+    .fill("Morgan Volunteer");
+  await page
+    .getByLabel("Preferred name * (Shown on your public profile)", { exact: true })
+    .fill("Morgan");
+  await page.getByLabel("Email *", { exact: true }).fill("morgan@example.com");
+  await page.getByLabel("Phone number *", { exact: true }).fill("647-555-0100");
+  await page.getByLabel("Date of birth *", { exact: true }).fill("2001-09-08");
+  await page
+    .getByLabel("What university or post-secondary institution are you a part of? *", {
+      exact: true,
+    })
+    .selectOption("Humber College");
+  await page
+    .getByLabel("Why are you interested in becoming a peer support volunteer? *", {
+      exact: true,
+    })
+    .fill("I want to support other young caregivers.");
+  await page
+    .getByLabel("Tell us more about your experience as a young caregiver. *", {
+      exact: true,
+    })
+    .fill("I supported a sibling while attending school.");
+  await page
+    .getByLabel(
+      "I understand and agree to how my information will be used and shared.",
+      { exact: true },
+    )
+    .check();
+  await page.getByRole("button", { name: "Submit Application", exact: true }).click();
+  await expect(page.getByText("Application submitted.", { exact: false })).toBeVisible();
+
+  await page.getByRole("button", { name: "Back to home", exact: true }).click();
+  await page.getByRole("button", { name: "For caregivers", exact: true }).click();
+
+  await page
+    .getByLabel("Full legal name * (Used internally only)", { exact: true })
+    .fill("New Caregiver");
+  await page
+    .getByLabel("Preferred name * (Shown to your volunteer match)", { exact: true })
+    .fill("Casey");
+  await page.getByLabel("Email *", { exact: true }).fill("new.caregiver@example.com");
+  await page.getByLabel("Phone number *", { exact: true }).fill("416-555-0100");
+  await page.getByLabel("Date of birth *", { exact: true }).fill("2002-04-15");
+  await page
+    .getByPlaceholder(
+      "Who you care for and a bit about your day-to-day (a short summary is enough)",
+      { exact: true },
+    )
+    .fill("I care for a parent while working.");
+  await page
+    .getByLabel("What kind of support are you looking for? *", { exact: true })
+    .fill("Find peer support close to home.");
+  await page
+    .getByLabel("How do you prefer to communicate? *", { exact: true })
+    .selectOption("Text");
+  await page
+    .getByLabel(
+      "I understand and agree to how my information will be used and shared.",
+      { exact: true },
+    )
+    .check();
+  await page.getByRole("button", { name: "Submit Application", exact: true }).click();
+
+  await expect(page.getByText("Application submitted.", { exact: false })).toBeVisible();
+  expect(state.applicationPayloads).toHaveLength(2);
+  expect(state.applicationPayloads[0].application_type).toBe("volunteer");
+  expect(state.applicationPayloads[0].university).toBe("Humber College");
+  expect(state.applicationPayloads[1].application_type).toBe("caregiver");
+  expect(state.applicationPayloads[1].university).toBeNull();
+  await page
+    .getByRole("button", { name: "Already a member? Sign in", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back", exact: true }),
+  ).toBeVisible();
   await expectHealthyPage(page, state);
 });
 
@@ -658,13 +876,52 @@ test("volunteer accepts requests and logs hours with topics and flags", async ({
   await expectHealthyPage(page, state);
 });
 
-test("normal admin is limited to one university while managing applications", async ({ page }) => {
+test("normal admin is limited to one university while managing applications", async ({ page }, testInfo) => {
   const state = await installPortalMocks(page, { role: "admin" });
   await signIn(page, state);
 
   await expect(page.getByRole("heading", { name: "Admin dashboard" })).toBeVisible();
   await expect(page.getByText("University of Toronto workspace.")).toBeVisible();
   await expect(page.getByText("We couldn't load this information.")).toHaveCount(0);
+
+  const programApplication = page.getByTestId(
+    "program-application-program-volunteer-pending",
+  );
+  await expect(programApplication).toBeVisible();
+  await expect(programApplication.getByText("Morgan", { exact: true })).toBeVisible();
+  await expect(
+    programApplication.getByText("morgan.volunteer@example.com", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    programApplication.getByText(
+      "I want other young caregivers to feel understood and less alone.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+
+  if (
+    process.env.ADMIN_APPROVAL_SCREENSHOT &&
+    testInfo.project.name === "desktop-chrome"
+  ) {
+    await page.locator("#program-applications").screenshot({
+      path: process.env.ADMIN_APPROVAL_SCREENSHOT,
+    });
+  }
+
+  await programApplication
+    .getByRole("button", { name: "Approve application", exact: true })
+    .click();
+  await expect(
+    page.getByText(
+      "Application approved. Create or invite the member account when ready.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  expect(
+    state.programApplications.find(
+      (application) => application.id === "program-volunteer-pending",
+    ).status,
+  ).toBe("approved");
 
   const inviteSection = page.locator("form").filter({
     has: page.getByRole("button", { name: "Preapprove", exact: true }),

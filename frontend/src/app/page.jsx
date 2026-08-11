@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import {
   apiFetch,
@@ -12,7 +11,10 @@ import {
   parseMentorAvailability,
   profilePayloadFromMetadata,
 } from "../lib/portalUtils";
-import { ONTARIO_UNIVERSITIES } from "../lib/ontarioUniversities";
+import {
+  ONTARIO_POSTSECONDARY_INSTITUTIONS,
+  ONTARIO_UNIVERSITIES,
+} from "../lib/ontarioUniversities";
 import { supabase, hasSupabaseEnv } from "../lib/supabaseClient";
 
 const EMPTY_ADMIN_INVITE_FORM = {
@@ -38,6 +40,25 @@ const EMPTY_ADMIN_PROFILE_FORM = {
   interests: "",
 };
 
+const EMPTY_PROGRAM_APPLICATION = {
+  fullLegalName: "",
+  preferredName: "",
+  email: "",
+  phoneNumber: "",
+  dateOfBirth: "",
+  university: "",
+  caregivingSituation: "",
+  supportRequested: "",
+  communicationPreference: "",
+  accessibilityNeeds: "",
+  additionalInformation: "",
+  volunteerMotivation: "",
+  caregivingExperience: "",
+  otherRelevantExperience: "",
+  schoolProgramInterest: "",
+  consentAcknowledged: false,
+};
+
 const ERROR_MESSAGES = {
   load: "We couldn't load this information. Please try again.",
   profile: "We couldn't load your account. Please try again.",
@@ -46,16 +67,205 @@ const ERROR_MESSAGES = {
   auth: "We couldn't complete your request. Please check your details and try again.",
 };
 
+function HeartMark({ inverted = false }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`brand-heart ${inverted ? "brand-heart-light" : ""}`}
+    >
+      <svg viewBox="0 0 24 24" fill="none">
+        <path
+          d="M20.8 5.9c-1.7-1.8-4.6-1.8-6.4 0L12 8.3 9.6 5.9a4.5 4.5 0 0 0-6.4 6.3l2.4 2.4L12 21l6.4-6.4 2.4-2.4a4.5 4.5 0 0 0 0-6.3Z"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
+  );
+}
+
+function LineIcon({ name }) {
+  const paths = {
+    apply: (
+      <>
+        <path d="m4 17 9.8-9.8 3 3L7 20H4v-3Z" />
+        <path d="m12.8 8.2 2-2a2.1 2.1 0 0 1 3 3l-2 2M12 20h8" />
+      </>
+    ),
+    review: (
+      <>
+        <rect x="5" y="5" width="14" height="16" rx="2" />
+        <path d="M9 5V3h6v2M9 11h6M9 15h4" />
+      </>
+    ),
+    connect: (
+      <>
+        <path d="m7.5 13.5 2.2 2.2 6.8-7" />
+        <path d="M19 12.5a7 7 0 1 1-3.4-6" />
+      </>
+    ),
+    shield: (
+      <>
+        <path d="M12 3 19 6v5c0 4.6-2.8 8.2-7 10-4.2-1.8-7-5.4-7-10V6l7-3Z" />
+        <path d="m9 12 2 2 4-4" />
+      </>
+    ),
+    campus: (
+      <>
+        <path d="m3 9 9-5 9 5-9 5-9-5Z" />
+        <path d="M7 12v5c3.2 2 6.8 2 10 0v-5M21 9v6" />
+      </>
+    ),
+    community: (
+      <>
+        <path d="M8 13 5.8 11a2.3 2.3 0 0 1 3.1-3.4L12 10.5l3.1-2.9a2.3 2.3 0 0 1 3.1 3.4L12 17l-2-1.8" />
+        <path d="m4 15 4 4 2-2M2 13l2-2" />
+      </>
+    ),
+  };
+
+  return (
+    <span className="line-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+        {paths[name]}
+      </svg>
+    </span>
+  );
+}
+
+function AdminProgramApplicationCard({
+  application,
+  isReviewing,
+  onReview,
+  reviewed = false,
+}) {
+  const isVolunteer = application.application_type === "volunteer";
+  const submittedDate = application.created_at
+    ? new Date(application.created_at).toLocaleDateString()
+    : "Unknown";
+  const dateOfBirth = application.date_of_birth
+    ? new Date(`${application.date_of_birth}T00:00:00`).toLocaleDateString()
+    : "Not provided";
+
+  const responseFields = isVolunteer
+    ? [
+        ["Why they want to volunteer", application.volunteer_motivation],
+        ["Young caregiver experience", application.caregiving_experience],
+        ["Other relevant experience", application.other_relevant_experience],
+        ["Interest in starting a school program", application.school_program_interest],
+      ]
+    : [
+        ["Caregiving situation", application.caregiving_situation],
+        ["Support requested", application.support_requested],
+        ["Communication preference", application.communication_preference],
+        ["Accessibility needs", application.accessibility_needs],
+        ["Additional information", application.additional_information],
+      ];
+
+  return (
+    <article
+      className="admin-application-card"
+      data-testid={`program-application-${application.id}`}
+    >
+      <div className="admin-application-heading">
+        <div>
+          <div className="admin-application-badges">
+            <span>{isVolunteer ? "Volunteer" : "Caregiver"}</span>
+            <span className={`request-status request-status-${application.status}`}>
+              {application.status}
+            </span>
+          </div>
+          <h5>{application.preferred_name || application.full_legal_name}</h5>
+          <p>
+            Submitted {submittedDate} · Legal name: {application.full_legal_name}
+          </p>
+        </div>
+        {!reviewed && (
+          <div className="admin-application-actions">
+            <button
+              type="button"
+              onClick={() => onReview(application.id, "approve")}
+              disabled={isReviewing}
+              className="admin-application-approve"
+            >
+              Approve application
+            </button>
+            <button
+              type="button"
+              onClick={() => onReview(application.id, "reject")}
+              disabled={isReviewing}
+              className="admin-application-reject"
+            >
+              Reject
+            </button>
+          </div>
+        )}
+      </div>
+
+      <section className="admin-application-private">
+        <div>
+          <p>Private screening information</p>
+          <span>Visible to QYCC administrators only</span>
+        </div>
+        <dl>
+          <div>
+            <dt>Email</dt>
+            <dd>{application.email}</dd>
+          </div>
+          <div>
+            <dt>Phone</dt>
+            <dd>{application.phone_number}</dd>
+          </div>
+          <div>
+            <dt>Date of birth</dt>
+            <dd>{dateOfBirth}</dd>
+          </div>
+          <div>
+            <dt>School</dt>
+            <dd>{application.university || "Not affiliated"}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="admin-application-responses">
+        <h6>Application responses</h6>
+        <dl>
+          {responseFields.map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value || "Not provided"}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
+      <div className="admin-application-consent">
+        <span aria-hidden="true">✓</span>
+        Privacy and information-sharing consent acknowledged
+        {reviewed && application.reviewed_at && (
+          <small>
+            Reviewed {new Date(application.reviewed_at).toLocaleDateString()}
+          </small>
+        )}
+      </div>
+    </article>
+  );
+}
+
 export default function Home() {
   const [emailInput, setEmailInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [isAuthPortalOpen, setIsAuthPortalOpen] = useState(false);
+  const [isAboutPage, setIsAboutPage] = useState(false);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [authMode, setAuthMode] = useState("signin");
   const [authError, setAuthError] = useState("");
   const [authSuccess, setAuthSuccess] = useState("");
   const [signupRole, setSignupRole] = useState("mentee");
+  const [isSignupRoleLocked, setIsSignupRoleLocked] = useState(false);
   const [signupUsername, setSignupUsername] = useState("");
   const [signupFullName, setSignupFullName] = useState("");
   const [signupUniversity, setSignupUniversity] = useState("");
@@ -64,6 +274,11 @@ export default function Home() {
   const [signupAvailability, setSignupAvailability] = useState("");
   const [signupGoals, setSignupGoals] = useState("");
   const [signupInterests, setSignupInterests] = useState("");
+  const [programApplication, setProgramApplication] = useState(
+    EMPTY_PROGRAM_APPLICATION,
+  );
+  const [isApplicationSubmitting, setIsApplicationSubmitting] =
+    useState(false);
   const [volunteers, setVolunteers] = useState([]);
   const [isLoadingVolunteers, setIsLoadingVolunteers] = useState(false);
   const [volunteerLoadError, setVolunteerLoadError] = useState("");
@@ -104,6 +319,9 @@ export default function Home() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [adminPendingUsers, setAdminPendingUsers] = useState([]);
   const [adminReviewedUsers, setAdminReviewedUsers] = useState([]);
+  const [adminProgramApplications, setAdminProgramApplications] = useState([]);
+  const [adminReviewedProgramApplications, setAdminReviewedProgramApplications] =
+    useState([]);
   const [adminMetrics, setAdminMetrics] = useState(null);
   const [adminMentors, setAdminMentors] = useState([]);
   const [adminMatches, setAdminMatches] = useState([]);
@@ -631,6 +849,8 @@ export default function Home() {
       const [
         pendingResponse,
         reviewedResponse,
+        programApplicationsResponse,
+        reviewedProgramApplicationsResponse,
         metricsResponse,
         mentorsResponse,
         sessionsResponse,
@@ -649,6 +869,22 @@ export default function Home() {
               Authorization: `Bearer ${token}`,
             },
           }),
+          apiFetch(
+            `${BACKEND_BASE_URL}/api/admin/program-applications?review_state=pending`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            },
+          ),
+          apiFetch(
+            `${BACKEND_BASE_URL}/api/admin/program-applications?review_state=reviewed`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            },
+          ),
           apiFetch(`${BACKEND_BASE_URL}/api/admin/dashboard`, {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -685,6 +921,8 @@ export default function Home() {
         [
           pendingResponse,
           reviewedResponse,
+          programApplicationsResponse,
+          reviewedProgramApplicationsResponse,
           metricsResponse,
           mentorsResponse,
           sessionsResponse,
@@ -698,6 +936,9 @@ export default function Home() {
 
       const pendingData = await pendingResponse.json();
       const reviewedData = await reviewedResponse.json();
+      const programApplicationsData = await programApplicationsResponse.json();
+      const reviewedProgramApplicationsData =
+        await reviewedProgramApplicationsResponse.json();
       const metricsData = await metricsResponse.json();
       const mentorsData = await mentorsResponse.json();
       const sessionsData = await sessionsResponse.json();
@@ -707,6 +948,10 @@ export default function Home() {
 
       setAdminPendingUsers(pendingData.pending_users ?? []);
       setAdminReviewedUsers(reviewedData.reviewed_users ?? []);
+      setAdminProgramApplications(programApplicationsData.applications ?? []);
+      setAdminReviewedProgramApplications(
+        reviewedProgramApplicationsData.applications ?? [],
+      );
       setAdminMetrics(metricsData);
       setAdminMentors(mentorsData.mentors ?? []);
       setAdminSessionEntries(sessionsData.entries ?? []);
@@ -776,6 +1021,8 @@ export default function Home() {
     if (!isUnlocked || !isAdmin) {
       setAdminPendingUsers([]);
       setAdminReviewedUsers([]);
+      setAdminProgramApplications([]);
+      setAdminReviewedProgramApplications([]);
       setAdminMetrics(null);
       setAdminMentors([]);
       setAdminMatches([]);
@@ -1114,6 +1361,45 @@ export default function Home() {
     }
   }
 
+  async function handleProgramApplicationAction(applicationId, action) {
+    const token = window.localStorage.getItem("ocgoAccessToken");
+    if (!token) {
+      setAdminError("Your session ended. Please sign in again.");
+      return;
+    }
+
+    setAdminActionUserId(applicationId);
+    setAdminError("");
+    setAdminSuccess("");
+
+    try {
+      const response = await apiFetch(
+        `${BACKEND_BASE_URL}/api/admin/program-applications/${applicationId}/${action}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error();
+      }
+
+      setAdminSuccess(
+        action === "approve"
+          ? "Application approved. Create or invite the member account when ready."
+          : "Application rejected.",
+      );
+      await loadAdminDashboardData();
+    } catch (_error) {
+      setAdminError(ERROR_MESSAGES.action);
+    } finally {
+      setAdminActionUserId("");
+    }
+  }
+
   async function handleRemoveMentorAccess(mentorId) {
     const token = window.localStorage.getItem("ocgoAccessToken");
     if (!token) {
@@ -1315,6 +1601,78 @@ export default function Home() {
     }
   }
 
+  function updateProgramApplication(field, value) {
+    setProgramApplication((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  async function handleApplicationSubmit(event) {
+    event.preventDefault();
+    setIsApplicationSubmitting(true);
+    setAuthError("");
+    setAuthSuccess("");
+
+    const isCaregiverApplication = signupRole === "mentee";
+    const payload = {
+      application_type: isCaregiverApplication ? "caregiver" : "volunteer",
+      full_legal_name: programApplication.fullLegalName.trim(),
+      preferred_name: programApplication.preferredName.trim(),
+      email: programApplication.email.trim(),
+      phone_number: programApplication.phoneNumber.trim(),
+      date_of_birth: programApplication.dateOfBirth,
+      university: programApplication.university || null,
+      consent_acknowledged: programApplication.consentAcknowledged,
+    };
+
+    if (isCaregiverApplication) {
+      payload.caregiving_situation =
+        programApplication.caregivingSituation.trim();
+      payload.support_requested = programApplication.supportRequested.trim();
+      payload.communication_preference =
+        programApplication.communicationPreference;
+      payload.accessibility_needs =
+        programApplication.accessibilityNeeds.trim() || null;
+      payload.additional_information =
+        programApplication.additionalInformation.trim() || null;
+    } else {
+      payload.volunteer_motivation =
+        programApplication.volunteerMotivation.trim();
+      payload.caregiving_experience =
+        programApplication.caregivingExperience.trim();
+      payload.other_relevant_experience =
+        programApplication.otherRelevantExperience.trim() || null;
+      payload.school_program_interest =
+        programApplication.schoolProgramInterest.trim() || null;
+    }
+
+    try {
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/applications`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const responseBody = await response.json().catch(() => null);
+        throw new Error(
+          typeof responseBody?.detail === "string"
+            ? responseBody.detail
+            : ERROR_MESSAGES.auth,
+        );
+      }
+
+      setAuthSuccess(
+        "Application submitted. Our team will review it and contact you about next steps.",
+      );
+    } catch (error) {
+      setAuthError(error.message || ERROR_MESSAGES.auth);
+    } finally {
+      setIsApplicationSubmitting(false);
+    }
+  }
+
   async function handleUnlock(event) {
     event.preventDefault();
     if (!hasSupabaseEnv || !supabase) {
@@ -1492,6 +1850,49 @@ export default function Home() {
     setCareType("");
   }
 
+  function openRoleSignup(role) {
+    setAuthError("");
+    setAuthSuccess("");
+    setAuthMode("signup");
+    setSignupRole(role);
+    setIsSignupRoleLocked(true);
+    setProgramApplication(EMPTY_PROGRAM_APPLICATION);
+    setIsAboutPage(false);
+    setIsAuthPortalOpen(true);
+  }
+
+  function showAboutPage() {
+    setAuthError("");
+    setAuthSuccess("");
+    setIsAuthPortalOpen(false);
+    setIsAboutPage(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function showHomePage(sectionId) {
+    setAuthError("");
+    setAuthSuccess("");
+    setIsAuthPortalOpen(false);
+    setIsAboutPage(false);
+    if (sectionId) {
+      requestAnimationFrame(() =>
+        document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" }),
+      );
+      return;
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function showMemberSignin() {
+    setAuthError("");
+    setAuthSuccess("");
+    setAuthMode("signin");
+    setIsSignupRoleLocked(false);
+    setIsAboutPage(false);
+    setIsAuthPortalOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function handleStartOver() {
     if (supabase) {
       supabase.auth.signOut();
@@ -1499,12 +1900,16 @@ export default function Home() {
     window.localStorage.removeItem("ocgoAccessToken");
     setEmailInput("");
     setPasswordInput("");
+    setProgramApplication(EMPTY_PROGRAM_APPLICATION);
+    setIsApplicationSubmitting(false);
     setIsUnlocked(false);
     setIsAuthPortalOpen(false);
+    setIsAboutPage(false);
     setIsAuthLoading(false);
     setAuthError("");
     setAuthSuccess("");
     setSignupRole("mentee");
+    setIsSignupRoleLocked(false);
     setSignupUsername("");
     setSignupFullName("");
     setSignupUniversity("");
@@ -1535,6 +1940,8 @@ export default function Home() {
     setIsSettingsOpen(false);
     setAdminPendingUsers([]);
     setAdminReviewedUsers([]);
+    setAdminProgramApplications([]);
+    setAdminReviewedProgramApplications([]);
     setAdminMetrics(null);
     setAdminMentors([]);
     setAdminMatches([]);
@@ -1603,60 +2010,93 @@ export default function Home() {
     setRequestError("");
   }
 
+  const showVolunteerApplication =
+    !isUnlocked &&
+    isAuthPortalOpen &&
+    authMode === "signup" &&
+    signupRole === "mentor" &&
+    isSignupRoleLocked;
+  const showCaregiverApplication =
+    !isUnlocked &&
+    isAuthPortalOpen &&
+    authMode === "signup" &&
+    signupRole === "mentee" &&
+    isSignupRoleLocked;
+  const showRoleApplication =
+    showVolunteerApplication || showCaregiverApplication;
+  const showPublicSiteHeader =
+    !isUnlocked && (!isAuthPortalOpen || showRoleApplication);
+
   return (
     <div className="min-h-screen bg-[#e8e5dd] text-[#0c0a08]">
-      <header className="sticky top-0 z-40 border-b border-[#d3d1c8] bg-[#e8e5dd]/95 backdrop-blur-md">
-        <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
-          <div className="flex min-w-0 items-center gap-3">
-            <span
-              aria-hidden="true"
-              className="font-display flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#2a3723] text-lg text-[#dcbc98]"
+      <header className={`sticky top-0 z-40 border-b border-[#d3d1c8] backdrop-blur-md ${showPublicSiteHeader ? "site-header" : "bg-[#e8e5dd]/95"}`}>
+        <div className={`mx-auto flex w-full items-center justify-between gap-3 ${showPublicSiteHeader ? "site-shell site-header-inner" : "max-w-7xl px-4 py-3 sm:px-6 lg:px-8"}`}>
+          {showPublicSiteHeader ? (
+            <button
+              type="button"
+              className="site-brand-link"
+              aria-label="QYCC home"
+              onClick={() => showHomePage()}
             >
-              C
-            </span>
-            <div>
-              <p className="text-[0.7rem] font-bold uppercase tracking-[0.14em] text-[#2a3723]">
-                Peer Support Portal
-              </p>
-              <p className="max-w-52 text-base font-bold leading-tight text-[#0c0a08] sm:max-w-none sm:text-lg">
-                Caregiver Volunteer Matching
-              </p>
+              <HeartMark />
+              <div>
+                <p className="site-brand-title">Peer support program for young caregivers</p>
+                <p className="site-brand-subtitle">Made by Queen&apos;s Young Caregivers Community (QYCC)</p>
+              </div>
+            </button>
+          ) : (
+            <div className="flex min-w-0 items-center gap-3">
+              <span
+                aria-hidden="true"
+                className="font-display flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#2a3723] text-lg text-[#dcbc98]"
+              >
+                C
+              </span>
+              <div>
+                <>
+                  <p className="text-[0.7rem] font-bold uppercase tracking-[0.14em] text-[#2a3723]">
+                    Peer Support Portal
+                  </p>
+                  <p className="max-w-52 text-base font-bold leading-tight text-[#0c0a08] sm:max-w-none sm:text-lg">
+                    Caregiver Volunteer Matching
+                  </p>
+                </>
+              </div>
             </div>
-          </div>
-          {!isUnlocked && !isAuthPortalOpen && (
-            <div className="flex items-center gap-2">
+          )}
+          {showPublicSiteHeader && (
+            <nav className="site-nav" aria-label="Main navigation">
               <button
                 type="button"
-                onClick={() => {
-                  setAuthMode("signin");
-                  setIsAuthPortalOpen(true);
-                }}
-                className="px-3 py-2 text-sm font-bold text-[#2a3723]"
+                onClick={showAboutPage}
+              >
+                About
+              </button>
+              <button
+                type="button"
+                onClick={() => openRoleSignup("mentee")}
+              >
+                For caregivers
+              </button>
+              <button
+                type="button"
+                onClick={() => openRoleSignup("mentor")}
+              >
+                For volunteers
+              </button>
+              <button
+                type="button"
+                className="site-nav-signin"
+                onClick={showMemberSignin}
               >
                 Sign in
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMode("signup");
-                  setSignupRole("mentee");
-                  setIsAuthPortalOpen(true);
-                }}
-                className="rounded-md bg-[#2a3723] px-4 py-2 text-sm font-bold text-white hover:bg-[#1f2b1b]"
-              >
-                <span className="hidden sm:inline">Create account</span>
-                <span className="sm:hidden">Join</span>
-              </button>
-            </div>
+            </nav>
           )}
-          {!isUnlocked && isAuthPortalOpen && (
+          {!isUnlocked && isAuthPortalOpen && !showRoleApplication && (
             <button
               type="button"
-              onClick={() => {
-                setAuthError("");
-                setAuthSuccess("");
-                setIsAuthPortalOpen(false);
-              }}
+              onClick={() => showHomePage()}
               className="text-sm font-bold text-[#2a3723] underline underline-offset-4"
             >
               Back to home
@@ -1704,246 +2144,792 @@ export default function Home() {
 
       <main
         className={
-          !isUnlocked && !isAuthPortalOpen
+          (!isUnlocked && !isAuthPortalOpen) || showRoleApplication
             ? "w-full"
             : "mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8"
         }
       >
-        {!isUnlocked && !isAuthPortalOpen && (
-          <>
-            <section className="hero-grain relative overflow-hidden bg-[#141b10]">
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute -top-40 right-[-10%] h-136 w-136 rounded-full bg-[#dcbc98]/15 blur-[120px]"
-              />
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute -bottom-48 left-[-12%] h-120 w-120 rounded-full bg-[#3f5233]/40 blur-[120px]"
-              />
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute -right-32 top-1/2 hidden -translate-y-1/2 lg:block"
-              >
-                <div className="h-176 w-176 rounded-full border border-[#e8e5dd]/10" />
-                <div className="absolute inset-16 rounded-full border border-[#e8e5dd]/10" />
-                <div className="absolute inset-32 rounded-full border border-[#dcbc98]/15" />
-              </div>
-
-              <div className="relative mx-auto grid w-full max-w-7xl items-center gap-14 px-6 py-20 sm:py-24 lg:grid-cols-[1.15fr_0.85fr] lg:px-8 lg:py-28">
-                <div className="max-w-2xl">
-                  <p className="fade-up inline-flex items-center gap-2 rounded-full border border-[#e8e5dd]/20 px-4 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-[#dcbc98]">
-                    <span className="h-1.5 w-1.5 rounded-full bg-[#dcbc98]" />
-                    Built around shared experience
+        {!isUnlocked && !isAuthPortalOpen && !isAboutPage && (
+          <div className="landing-site">
+            <section className="site-hero">
+              <div className="site-shell hero-layout">
+                <div className="hero-copy">
+                  <p className="community-pill"><LineIcon name="community" /> Queen&apos;s Young Caregivers Community</p>
+                  <h1>Peer support, from<br />people who <em>get it.</em></h1>
+                  <p className="hero-description">
+                    We connect young caregivers with trained peer support volunteers who&apos;ve lived through caregiving themselves; people close to your age, your campus, your situation.
                   </p>
-                  <h1 className="fade-up fade-up-1 mt-6 text-5xl font-medium leading-[1.05] text-[#f4f2ec] sm:text-6xl lg:text-7xl">
-                    Care for the people
-                    <br />
-                    who <em className="text-[#dcbc98]">care for others.</em>
-                  </h1>
-                  <p className="fade-up fade-up-2 mt-6 max-w-xl text-lg leading-8 text-[#c9cbbd]">
-                    One-to-one peer support for student caregivers, matched with
-                    trained volunteers who understand the realities of
-                    caregiving at your university.
-                  </p>
-                  <div className="fade-up fade-up-3 mt-9 flex flex-wrap gap-3">
+                  <div className="hero-actions">
                     <button
                       type="button"
-                      onClick={() => {
-                        setAuthMode("signup");
-                        setSignupRole("mentee");
-                        setIsAuthPortalOpen(true);
-                      }}
-                      className="rounded-full bg-[#dcbc98] px-7 py-3.5 text-sm font-extrabold text-[#141b10] shadow-[0_8px_30px_rgb(220_188_152/25%)] hover:bg-[#e5c9a8]"
+                      className="site-button site-button-dark"
+                      onClick={() => openRoleSignup("mentee")}
                     >
-                      Find peer support
+                      I&apos;m a young caregiver <span aria-hidden="true">→</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setAuthMode("signup");
-                        setSignupRole("mentor");
-                        setIsAuthPortalOpen(true);
-                      }}
-                      className="rounded-full border border-[#e8e5dd]/30 px-7 py-3.5 text-sm font-extrabold text-[#f4f2ec] hover:border-[#e8e5dd]/60 hover:bg-white/5"
+                      className="site-button site-button-tan"
+                      onClick={() => openRoleSignup("mentor")}
                     >
-                      Volunteer with us
+                      I want to volunteer
                     </button>
                   </div>
-                  <dl className="fade-up fade-up-4 mt-14 grid max-w-xl grid-cols-3 gap-6 border-t border-[#e8e5dd]/15 pt-7">
-                    <div>
-                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8f9583]">
-                        Universities
-                      </dt>
-                      <dd className="font-display mt-1.5 text-2xl text-[#f4f2ec]">
-                        Ontario-wide
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8f9583]">
-                        Matching
-                      </dt>
-                      <dd className="font-display mt-1.5 text-2xl text-[#f4f2ec]">
-                        1-to-1 peers
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8f9583]">
-                        Profiles
-                      </dt>
-                      <dd className="font-display mt-1.5 text-2xl text-[#f4f2ec]">
-                        Admin-reviewed
-                      </dd>
-                    </div>
-                  </dl>
                 </div>
+                <div className="hero-art" aria-hidden="true">
+                  <span className="hero-circle hero-circle-small" />
+                  <span className="hero-circle hero-circle-large" />
+                </div>
+              </div>
+            </section>
 
-                <div
-                  aria-hidden="true"
-                  className="fade-up fade-up-3 relative hidden select-none lg:block"
+            <section className="how-section" id="how-it-works">
+              <div className="site-shell">
+                <h2>How it works</h2>
+                <div className="step-grid">
+                  <article className="step-card">
+                    <div className="step-meta"><LineIcon name="apply" /><span>Step 1</span></div>
+                    <h3>Apply</h3>
+                    <p>Caregivers and volunteers each fill out a short interest form. It only takes a few minutes.</p>
+                  </article>
+                  <article className="step-card">
+                    <div className="step-meta"><LineIcon name="review" /><span>Step 2</span></div>
+                    <h3>We review</h3>
+                    <p>Caregivers are reviewed and approved by our team. Volunteers are interviewed and complete training designed in partnership with the Ontario Caregiver Organization (OCO).</p>
+                  </article>
+                  <article className="step-card">
+                    <div className="step-meta"><LineIcon name="connect" /><span>Step 3</span></div>
+                    <h3>Connect</h3>
+                    <p>Once approved, caregivers can find a peer supporter who fits their situation, at their school or elsewhere.</p>
+                  </article>
+                </div>
+              </div>
+            </section>
+
+            <section className="trust-section" id="about">
+              <div className="site-shell">
+                <h2>You&apos;re in good hands</h2>
+                <div className="trust-grid">
+                  <article className="trust-item">
+                    <LineIcon name="shield" />
+                    <div><h3>Vetted &amp; trained</h3><p>Every volunteer is carefully interviewed and completes specialized training provided by the OCO.</p></div>
+                  </article>
+                  <article className="trust-item">
+                    <LineIcon name="campus" />
+                    <div><h3>Rooted on campus</h3><p>The program started at Queen&apos;s University and is expanding to other campuses across Ontario.</p></div>
+                  </article>
+                  <article className="trust-item">
+                    <LineIcon name="community" />
+                    <div><h3>Built by community</h3><p>A partnership between QYCC and OCO, led by young people who&apos;ve cared for loved ones themselves.</p></div>
+                  </article>
+                </div>
+              </div>
+            </section>
+
+            <section className="volunteer-callout">
+              <div className="site-shell callout-layout">
+                <div>
+                  <h2>We&apos;re looking for volunteers and<br />student leaders, especially outside<br />Queen&apos;s.</h2>
+                  <p>If you&apos;ve cared for a family member and you&apos;re at another university or college, this is a chance to bring peer support and caregiver advocacy to your own campus. Apply to be a volunteer and let us know you&apos;re interested!</p>
+                </div>
+                <button
+                  type="button"
+                  className="site-button site-button-dark"
+                  onClick={() => openRoleSignup("mentor")}
                 >
-                  <div className="-rotate-2 rounded-2xl border border-[#e8e5dd]/15 bg-[#1d2716]/90 p-6 shadow-[0_24px_60px_rgb(0_0_0/35%)] backdrop-blur">
-                    <div className="flex items-center gap-4">
-                      <div className="font-display flex h-14 w-14 items-center justify-center rounded-full bg-[#dcbc98] text-xl text-[#141b10]">
-                        A
-                      </div>
-                      <div>
-                        <p className="text-base font-bold text-[#f4f2ec]">
-                          Aisha, Volunteer
-                        </p>
-                        <p className="text-sm text-[#9aa08d]">
-                          University of Toronto
-                        </p>
-                      </div>
-                      <span className="ml-auto rounded-full bg-[#dfe9db]/10 px-3 py-1 text-xs font-bold text-[#a7c3a0]">
-                        Available
-                      </span>
-                    </div>
-                    <p className="mt-5 text-sm leading-6 text-[#c9cbbd]">
-                      &ldquo;I cared for my grandmother through my undergrad. I
-                      know how heavy it gets, and how much one conversation can
-                      help.&rdquo;
-                    </p>
-                    <div className="mt-5 flex flex-wrap gap-2">
-                      <span className="rounded-full border border-[#e8e5dd]/15 px-3 py-1 text-xs font-semibold text-[#c9cbbd]">
-                        Peer support
-                      </span>
-                      <span className="rounded-full border border-[#e8e5dd]/15 px-3 py-1 text-xs font-semibold text-[#c9cbbd]">
-                        Remote
-                      </span>
-                      <span className="rounded-full border border-[#e8e5dd]/15 px-3 py-1 text-xs font-semibold text-[#c9cbbd]">
-                        Weekends
-                      </span>
-                    </div>
-                  </div>
-                  <div className="absolute -bottom-8 -left-6 rotate-2 rounded-xl border border-[#e8e5dd]/15 bg-[#f4f2ec] px-5 py-4 shadow-[0_18px_44px_rgb(0_0_0/35%)]">
-                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#59604f]">
-                      Match request
-                    </p>
-                    <p className="mt-1 flex items-center gap-2 text-sm font-bold text-[#0c0a08]">
-                      <span className="h-2 w-2 rounded-full bg-[#2a5a32]" />
-                      Accepted &mdash; first meeting booked
-                    </p>
-                  </div>
-                </div>
+                  Apply to volunteer <span aria-hidden="true">→</span>
+                </button>
               </div>
             </section>
 
-            <section className="bg-[#e8e5dd] px-6 py-20 sm:py-24">
-              <div className="mx-auto w-full max-w-7xl">
-                <div className="max-w-2xl">
-                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#2a3723]">
-                    Support that starts nearby
-                  </p>
-                  <h2 className="mt-4 text-4xl font-medium text-[#0c0a08] sm:text-5xl">
-                    A thoughtful match,
-                    <br />
-                    with room to choose.
-                  </h2>
+            <footer className="site-footer">
+              <div className="site-shell footer-grid">
+                <div>
+                  <p className="footer-brand"><HeartMark inverted /> <span>QYCC</span></p>
+                  <p>Queen&apos;s Young Caregivers Community</p>
                 </div>
-                <div className="mt-12 grid gap-5 md:grid-cols-3">
-                  <div className="hover-lift rounded-2xl border border-[#d3d1c8] bg-white p-8">
-                    <p className="font-display text-5xl text-[#dcbc98]">1</p>
-                    <h3 className="mt-6 text-xl font-bold">
-                      Create your profile
-                    </h3>
-                    <p className="mt-2.5 leading-7 text-[#41473b]">
-                      Share your university, experience, and the kind of
-                      support you are looking for.
-                    </p>
-                  </div>
-                  <div className="hover-lift rounded-2xl border border-[#d3d1c8] bg-white p-8">
-                    <p className="font-display text-5xl text-[#dcbc98]">2</p>
-                    <h3 className="mt-6 text-xl font-bold">
-                      Browse your community
-                    </h3>
-                    <p className="mt-2.5 leading-7 text-[#41473b]">
-                      Start with available volunteers at your university, then
-                      broaden the search when you choose.
-                    </p>
-                  </div>
-                  <div className="hover-lift rounded-2xl border border-[#d3d1c8] bg-white p-8">
-                    <p className="font-display text-5xl text-[#dcbc98]">3</p>
-                    <h3 className="mt-6 text-xl font-bold">
-                      Connect with confidence
-                    </h3>
-                    <p className="mt-2.5 leading-7 text-[#41473b]">
-                      Send one clear request and follow its status from pending
-                      to an active match.
-                    </p>
-                  </div>
+                <div>
+                  <h3>Get involved</h3>
+                  <button type="button" onClick={() => openRoleSignup("mentee")}>Get support</button>
+                  <button type="button" onClick={() => openRoleSignup("mentor")}>Volunteer</button>
+                  <button type="button" onClick={() => document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })}>How it works</button>
+                </div>
+                <div>
+                  <h3>Contact</h3>
+                  <a href="mailto:youngcaregiverscommunity@clubs.queensu.ca">youngcaregiverscommunity@clubs.queensu.ca</a>
+                  <a href="https://www.instagram.com/queensyoungcaregivers/" target="_blank" rel="noreferrer">IG: @queensyoungcaregivers</a>
                 </div>
               </div>
-            </section>
-
-            <section className="px-6 pb-20 sm:pb-24">
-              <div className="mx-auto w-full max-w-7xl overflow-hidden rounded-3xl bg-[#2a3723] px-8 py-16 text-center sm:px-12 sm:py-20">
-                <h2 className="mx-auto max-w-2xl text-3xl font-medium text-[#f4f2ec] sm:text-4xl">
-                  You don&rsquo;t have to carry it alone.
-                </h2>
-                <p className="mx-auto mt-4 max-w-xl leading-7 text-[#c9cbbd]">
-                  Join a community of caregivers and volunteers who get it.
-                  Creating a profile takes a few minutes.
-                </p>
-                <div className="mt-8 flex flex-wrap justify-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode("signup");
-                      setSignupRole("mentee");
-                      setIsAuthPortalOpen(true);
-                    }}
-                    className="rounded-full bg-[#dcbc98] px-7 py-3.5 text-sm font-extrabold text-[#141b10] hover:bg-[#e5c9a8]"
-                  >
-                    Create your account
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode("signin");
-                      setIsAuthPortalOpen(true);
-                    }}
-                    className="rounded-full border border-[#e8e5dd]/30 px-7 py-3.5 text-sm font-extrabold text-[#f4f2ec] hover:bg-white/5"
-                  >
-                    Sign in
-                  </button>
-                </div>
-              </div>
-            </section>
-
-            <footer className="border-t border-[#d3d1c8] px-6 py-10">
-              <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-4">
-                <p className="font-display text-lg text-[#0c0a08]">
-                  Caregiver Volunteer Matching
-                </p>
-                <p className="text-sm text-[#59604f]">
-                  Peer support for university caregivers across Ontario.
-                </p>
+              <div className="site-shell footer-bottom">
+                <p>© 2026 Queen&apos;s Young Caregivers Community. In partnership with the Ontario Caregiver Organization.</p>
+                <button type="button" onClick={() => { setAuthMode("signin"); setSignupRole("mentee"); setIsSignupRoleLocked(false); setIsAboutPage(false); setIsAuthPortalOpen(true); }}>Member sign in</button>
               </div>
             </footer>
-          </>
+          </div>
         )}
 
-        {!isUnlocked && isAuthPortalOpen && (
+        {!isUnlocked && !isAuthPortalOpen && isAboutPage && (
+          <div className="about-page">
+            <section className="about-section">
+              <div className="about-shell">
+                <h1>About</h1>
+
+                <section>
+                  <h2>What we do</h2>
+                  <p>
+                    We connect young caregivers with trained peer support
+                    volunteers; people who&apos;ve cared for loved ones themselves
+                    and understand what that actually looks like day to day. A
+                    lot of young caregivers go through this without knowing
+                    anyone else their age who&apos;s in the same position, and that
+                    isolation is common especially because caregiving at a young
+                    age isn&apos;t something most people around you have experienced.
+                    Peer support exists to close that gap: someone to talk to who
+                    doesn&apos;t need the situation explained to them.
+                  </p>
+                </section>
+
+                <section>
+                  <h2>Where we started</h2>
+                  <p>
+                    QYCC was founded at Queen&apos;s University in 2023 to support
+                    young caregivers on campus. What began as a small community
+                    has grown into a peer support program, and we&apos;re officially
+                    launching it this summer, in 2026.
+                  </p>
+                </section>
+
+                <section>
+                  <h2>Where we&apos;re headed</h2>
+                  <p>
+                    One day we hope every young caregiver will have a place to
+                    connect with someone who gets it. That means growing beyond
+                    Queen&apos;s and building a network of trained peer support
+                    volunteers across universities and colleges, so a young
+                    caregiver anywhere in Ontario can find someone nearby, or
+                    find someone whose situation looks like theirs.
+                  </p>
+                </section>
+
+                <section>
+                  <h2>Start a program at your school</h2>
+                  <p>
+                    We&apos;re looking for student leaders at other universities and
+                    colleges who want to bring peer support to their own campus.
+                    This doesn&apos;t mean building something from scratch; we&apos;ll
+                    support you with training, structure, and the operational
+                    pieces we&apos;ve already worked out at Queen&apos;s. If you&apos;ve cared
+                    for a family member and want to help other students going
+                    through the same thing, lean on what we&apos;ve already built, and
+                    grow it into something your campus needs.
+                  </p>
+                </section>
+
+                <button
+                  type="button"
+                  className="site-button site-button-dark about-cta"
+                  onClick={() => openRoleSignup("mentor")}
+                >
+                  Apply to volunteer <span aria-hidden="true">→</span>
+                </button>
+              </div>
+            </section>
+
+            <footer className="site-footer">
+              <div className="site-shell footer-grid">
+                <div>
+                  <p className="footer-brand"><HeartMark inverted /> <span>QYCC</span></p>
+                  <p>Queen&apos;s Young Caregivers Community</p>
+                </div>
+                <div>
+                  <h3>Get involved</h3>
+                  <button type="button" onClick={() => openRoleSignup("mentee")}>Get support</button>
+                  <button type="button" onClick={() => openRoleSignup("mentor")}>Volunteer</button>
+                  <button type="button" onClick={() => showHomePage("how-it-works")}>How it works</button>
+                </div>
+                <div>
+                  <h3>Contact</h3>
+                  <a href="mailto:youngcaregiverscommunity@clubs.queensu.ca">youngcaregiverscommunity@clubs.queensu.ca</a>
+                  <a href="https://www.instagram.com/queensyoungcaregivers/" target="_blank" rel="noreferrer">IG: @queensyoungcaregivers</a>
+                </div>
+              </div>
+              <div className="site-shell footer-bottom">
+                <p>© 2026 Queen&apos;s Young Caregivers Community. In partnership with the Ontario Caregiver Organization.</p>
+              </div>
+            </footer>
+          </div>
+        )}
+
+        {showCaregiverApplication && (
+          <div className="volunteer-application-page caregiver-application-page">
+            <section className="volunteer-application-section">
+              <div className="volunteer-application-shell">
+                <button
+                  type="button"
+                  className="application-back"
+                  onClick={() => showHomePage()}
+                >
+                  <span aria-hidden="true">←</span> Back to home
+                </button>
+
+                <div className="application-heading">
+                  <h1>Get Matched with a Peer Supporter</h1>
+                  <p>
+                    This is an interest form to get connected with a trained peer
+                    support volunteer. Submissions are reviewed by our team, and
+                    you don&apos;t need to be part of a university or college to
+                    apply.
+                  </p>
+                </div>
+
+                <form className="application-form" onSubmit={handleApplicationSubmit}>
+                  <div className="application-field">
+                    <label htmlFor="caregiver-full-legal-name">
+                      Full legal name * <span>(Used internally only)</span>
+                    </label>
+                    <input
+                      id="caregiver-full-legal-name"
+                      type="text"
+                      value={programApplication.fullLegalName}
+                      onChange={(event) =>
+                        updateProgramApplication("fullLegalName", event.target.value)
+                      }
+                      autoComplete="name"
+                      maxLength={120}
+                      required
+                    />
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="caregiver-preferred-name">
+                      Preferred name * <span>(Shown to your volunteer match)</span>
+                    </label>
+                    <input
+                      id="caregiver-preferred-name"
+                      type="text"
+                      value={programApplication.preferredName}
+                      onChange={(event) =>
+                        updateProgramApplication("preferredName", event.target.value)
+                      }
+                      maxLength={120}
+                      required
+                    />
+                  </div>
+
+                  <div className="application-two-column">
+                    <div className="application-field">
+                      <label htmlFor="caregiver-email">Email *</label>
+                      <input
+                        id="caregiver-email"
+                        type="email"
+                        value={programApplication.email}
+                        onChange={(event) =>
+                          updateProgramApplication("email", event.target.value)
+                        }
+                        autoComplete="email"
+                        required
+                      />
+                    </div>
+                    <div className="application-field">
+                      <label htmlFor="caregiver-phone">Phone number *</label>
+                      <input
+                        id="caregiver-phone"
+                        type="tel"
+                        value={programApplication.phoneNumber}
+                        onChange={(event) =>
+                          updateProgramApplication("phoneNumber", event.target.value)
+                        }
+                        autoComplete="tel"
+                        maxLength={40}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="caregiver-date-of-birth">Date of birth *</label>
+                    <input
+                      id="caregiver-date-of-birth"
+                      type="date"
+                      value={programApplication.dateOfBirth}
+                      onChange={(event) =>
+                        updateProgramApplication("dateOfBirth", event.target.value)
+                      }
+                      autoComplete="bday"
+                      required
+                    />
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="caregiver-university">
+                      What university or post-secondary institution are you a part of, if any?
+                      <span>(Optional — you don&apos;t need to be enrolled anywhere)</span>
+                    </label>
+                    <select
+                      id="caregiver-university"
+                      value={programApplication.university}
+                      onChange={(event) =>
+                        updateProgramApplication("university", event.target.value)
+                      }
+                    >
+                      <option value="">Select your school (optional)</option>
+                      {ONTARIO_POSTSECONDARY_INSTITUTIONS.map((institution) => (
+                        <option key={institution} value={institution}>
+                          {institution}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="caregiver-situation">
+                      Tell us about your caregiving situation *
+                      <span>(A brief 1–2 sentences — shared with a prospective volunteer)</span>
+                    </label>
+                    <textarea
+                      id="caregiver-situation"
+                      value={programApplication.caregivingSituation}
+                      onChange={(event) =>
+                        updateProgramApplication("caregivingSituation", event.target.value)
+                      }
+                      rows={4}
+                      maxLength={2000}
+                      placeholder="Who you care for and a bit about your day-to-day (a short summary is enough)"
+                      required
+                    />
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="caregiver-support-requested">
+                      What kind of support are you looking for? *
+                    </label>
+                    <textarea
+                      id="caregiver-support-requested"
+                      value={programApplication.supportRequested}
+                      onChange={(event) =>
+                        updateProgramApplication("supportRequested", event.target.value)
+                      }
+                      rows={4}
+                      maxLength={2000}
+                      required
+                    />
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="caregiver-communication">
+                      How do you prefer to communicate? *
+                    </label>
+                    <select
+                      id="caregiver-communication"
+                      value={programApplication.communicationPreference}
+                      onChange={(event) =>
+                        updateProgramApplication(
+                          "communicationPreference",
+                          event.target.value,
+                        )
+                      }
+                      required
+                    >
+                      <option value="">Select a preference</option>
+                      <option value="Text">Text</option>
+                      <option value="Email">Email</option>
+                      <option value="Phone call">Phone call</option>
+                      <option value="Video call">Video call</option>
+                      <option value="No preference">No preference</option>
+                    </select>
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="caregiver-accessibility">
+                      Accessibility needs <span>(Optional)</span>
+                    </label>
+                    <textarea
+                      id="caregiver-accessibility"
+                      value={programApplication.accessibilityNeeds}
+                      onChange={(event) =>
+                        updateProgramApplication("accessibilityNeeds", event.target.value)
+                      }
+                      rows={4}
+                      maxLength={2000}
+                    />
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="caregiver-additional-information">
+                      Anything else you&apos;d like our team to know?
+                      <span>(This stays internal to QYCC — it is not shared with a volunteer)</span>
+                    </label>
+                    <textarea
+                      id="caregiver-additional-information"
+                      value={programApplication.additionalInformation}
+                      onChange={(event) =>
+                        updateProgramApplication("additionalInformation", event.target.value)
+                      }
+                      rows={4}
+                      maxLength={2000}
+                    />
+                  </div>
+
+                  <p className="application-privacy-note">
+                    If you request a mentor, selected information from this form
+                    will be shared with that mentor so they can decide whether
+                    they are comfortable accepting the match. This may include
+                    your preferred name, broad caregiving situation, support
+                    goals, availability, preferred communication method,
+                    accessibility needs, and relevant matching preferences.
+                    Direct contact information, if required, is shared only
+                    after the mentor accepts. QYCC coordinators may access
+                    information and website messages for program administration,
+                    safety, supervision, and quality assurance. The website is
+                    not an emergency service.
+                  </p>
+
+                  <label className="application-consent">
+                    <input
+                      type="checkbox"
+                      checked={programApplication.consentAcknowledged}
+                      onChange={(event) =>
+                        updateProgramApplication(
+                          "consentAcknowledged",
+                          event.target.checked,
+                        )
+                      }
+                      required
+                    />
+                    <span>
+                      I understand and agree to how my information will be used
+                      and shared.
+                    </span>
+                  </label>
+
+                  {authError && (
+                    <p className="application-message application-error">{authError}</p>
+                  )}
+                  {authSuccess && (
+                    <p className="application-message application-success">{authSuccess}</p>
+                  )}
+
+                  <div className="application-submit-row">
+                    <button
+                      type="submit"
+                      disabled={
+                        isApplicationSubmitting ||
+                        !programApplication.consentAcknowledged
+                      }
+                    >
+                      {isApplicationSubmitting
+                        ? "Please wait..."
+                        : "Submit Application"}
+                    </button>
+                    <button
+                      type="button"
+                      className="application-signin-link"
+                      onClick={showMemberSignin}
+                    >
+                      Already a member? Sign in
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </section>
+
+            <footer className="site-footer">
+              <div className="site-shell footer-grid">
+                <div>
+                  <p className="footer-brand"><HeartMark inverted /> <span>QYCC</span></p>
+                  <p>Queen&apos;s Young Caregivers Community</p>
+                </div>
+                <div>
+                  <h3>Get involved</h3>
+                  <button type="button" onClick={() => openRoleSignup("mentee")}>Get support</button>
+                  <button type="button" onClick={() => openRoleSignup("mentor")}>Volunteer</button>
+                  <button type="button" onClick={() => showHomePage("how-it-works")}>How it works</button>
+                </div>
+                <div>
+                  <h3>Contact</h3>
+                  <a href="mailto:youngcaregiverscommunity@clubs.queensu.ca">youngcaregiverscommunity@clubs.queensu.ca</a>
+                  <a href="https://www.instagram.com/queensyoungcaregivers/" target="_blank" rel="noreferrer">IG: @queensyoungcaregivers</a>
+                </div>
+              </div>
+              <div className="site-shell footer-bottom">
+                <p>© 2026 Queen&apos;s Young Caregivers Community. In partnership with the Ontario Caregiver Organization.</p>
+              </div>
+            </footer>
+          </div>
+        )}
+
+        {showVolunteerApplication && (
+          <div className="volunteer-application-page">
+            <section className="volunteer-application-section">
+              <div className="volunteer-application-shell">
+                <button
+                  type="button"
+                  className="application-back"
+                  onClick={() => showHomePage()}
+                >
+                  <span aria-hidden="true">←</span> Back to home
+                </button>
+
+                <div className="application-heading">
+                  <h1>Apply to Be a Peer Support Volunteer</h1>
+                  <p>
+                    After you submit, the next step is a short interview,
+                    followed by training adapted from the Ontario Caregiver
+                    Organization!
+                  </p>
+                </div>
+
+                <form className="application-form" onSubmit={handleApplicationSubmit}>
+                  <div className="application-field">
+                    <label htmlFor="volunteer-full-legal-name">
+                      Full legal name * <span>(Used internally only)</span>
+                    </label>
+                    <input
+                      id="volunteer-full-legal-name"
+                      type="text"
+                      value={programApplication.fullLegalName}
+                      onChange={(event) =>
+                        updateProgramApplication("fullLegalName", event.target.value)
+                      }
+                      autoComplete="name"
+                      maxLength={120}
+                      required
+                    />
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="volunteer-preferred-name">
+                      Preferred name * <span>(Shown on your public profile)</span>
+                    </label>
+                    <input
+                      id="volunteer-preferred-name"
+                      type="text"
+                      value={programApplication.preferredName}
+                      onChange={(event) =>
+                        updateProgramApplication("preferredName", event.target.value)
+                      }
+                      maxLength={120}
+                      required
+                    />
+                  </div>
+
+                  <div className="application-two-column">
+                    <div className="application-field">
+                      <label htmlFor="volunteer-email">Email *</label>
+                      <input
+                        id="volunteer-email"
+                        type="email"
+                        value={programApplication.email}
+                        onChange={(event) =>
+                          updateProgramApplication("email", event.target.value)
+                        }
+                        autoComplete="email"
+                        required
+                      />
+                    </div>
+                    <div className="application-field">
+                      <label htmlFor="volunteer-phone">Phone number *</label>
+                      <input
+                        id="volunteer-phone"
+                        type="tel"
+                        value={programApplication.phoneNumber}
+                        onChange={(event) =>
+                          updateProgramApplication("phoneNumber", event.target.value)
+                        }
+                        autoComplete="tel"
+                        maxLength={40}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="volunteer-date-of-birth">Date of birth *</label>
+                    <input
+                      id="volunteer-date-of-birth"
+                      type="date"
+                      value={programApplication.dateOfBirth}
+                      onChange={(event) =>
+                        updateProgramApplication("dateOfBirth", event.target.value)
+                      }
+                      autoComplete="bday"
+                      required
+                    />
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="volunteer-university">
+                      What university or post-secondary institution are you a part of? *
+                    </label>
+                    <select
+                      id="volunteer-university"
+                      value={programApplication.university}
+                      onChange={(event) =>
+                        updateProgramApplication("university", event.target.value)
+                      }
+                      required
+                    >
+                      <option value="">Select your school</option>
+                      {ONTARIO_POSTSECONDARY_INSTITUTIONS.map((institution) => (
+                        <option key={institution} value={institution}>
+                          {institution}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="volunteer-motivation">
+                      Why are you interested in becoming a peer support volunteer? *
+                    </label>
+                    <textarea
+                      id="volunteer-motivation"
+                      value={programApplication.volunteerMotivation}
+                      onChange={(event) =>
+                        updateProgramApplication("volunteerMotivation", event.target.value)
+                      }
+                      rows={4}
+                      maxLength={2000}
+                      required
+                    />
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="volunteer-caregiving-experience">
+                      Tell us more about your experience as a young caregiver. *
+                    </label>
+                    <textarea
+                      id="volunteer-caregiving-experience"
+                      value={programApplication.caregivingExperience}
+                      onChange={(event) =>
+                        updateProgramApplication("caregivingExperience", event.target.value)
+                      }
+                      rows={4}
+                      maxLength={2000}
+                      required
+                    />
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="volunteer-other-experience">
+                      Do you have any other experiences that might support you in this role?
+                      <span>(Optional)</span>
+                    </label>
+                    <textarea
+                      id="volunteer-other-experience"
+                      value={programApplication.otherRelevantExperience}
+                      onChange={(event) =>
+                        updateProgramApplication(
+                          "otherRelevantExperience",
+                          event.target.value,
+                        )
+                      }
+                      rows={4}
+                      maxLength={2000}
+                    />
+                  </div>
+
+                  <div className="application-field">
+                    <label htmlFor="volunteer-school-program-interest">
+                      Are you interested in starting a peer support program at your own school?
+                      <span>(Optional — tell us why, and what makes you qualified)</span>
+                    </label>
+                    <textarea
+                      id="volunteer-school-program-interest"
+                      value={programApplication.schoolProgramInterest}
+                      onChange={(event) =>
+                        updateProgramApplication("schoolProgramInterest", event.target.value)
+                      }
+                      rows={4}
+                      maxLength={2000}
+                    />
+                  </div>
+
+                  <p className="application-privacy-note">
+                    Information you provide may be used to assess eligibility,
+                    create a mentor profile, support matching, administer the
+                    program, and address safety or conduct concerns. Your public
+                    profile will contain only the fields shown to you for
+                    approval. Your private contact and screening information
+                    will not be shown to mentees unless you expressly choose an
+                    approved contact method that requires disclosure.
+                  </p>
+
+                  <label className="application-consent">
+                    <input
+                      type="checkbox"
+                      checked={programApplication.consentAcknowledged}
+                      onChange={(event) =>
+                        updateProgramApplication(
+                          "consentAcknowledged",
+                          event.target.checked,
+                        )
+                      }
+                      required
+                    />
+                    <span>
+                      I understand and agree to how my information will be used
+                      and shared.
+                    </span>
+                  </label>
+
+                  {authError && (
+                    <p className="application-message application-error">{authError}</p>
+                  )}
+                  {authSuccess && (
+                    <p className="application-message application-success">{authSuccess}</p>
+                  )}
+
+                  <div className="application-submit-row">
+                    <button
+                      type="submit"
+                      disabled={
+                        isApplicationSubmitting ||
+                        !programApplication.consentAcknowledged
+                      }
+                    >
+                      {isApplicationSubmitting
+                        ? "Please wait..."
+                        : "Submit Application"}
+                    </button>
+                    <button
+                      type="button"
+                      className="application-signin-link"
+                      onClick={showMemberSignin}
+                    >
+                      Already a member? Sign in
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </section>
+
+            <footer className="site-footer">
+              <div className="site-shell footer-grid">
+                <div>
+                  <p className="footer-brand"><HeartMark inverted /> <span>QYCC</span></p>
+                  <p>Queen&apos;s Young Caregivers Community</p>
+                </div>
+                <div>
+                  <h3>Get involved</h3>
+                  <button type="button" onClick={() => openRoleSignup("mentee")}>Get support</button>
+                  <button type="button" onClick={() => openRoleSignup("mentor")}>Volunteer</button>
+                  <button type="button" onClick={() => showHomePage("how-it-works")}>How it works</button>
+                </div>
+                <div>
+                  <h3>Contact</h3>
+                  <a href="mailto:youngcaregiverscommunity@clubs.queensu.ca">youngcaregiverscommunity@clubs.queensu.ca</a>
+                  <a href="https://www.instagram.com/queensyoungcaregivers/" target="_blank" rel="noreferrer">IG: @queensyoungcaregivers</a>
+                </div>
+              </div>
+              <div className="site-shell footer-bottom">
+                <p>© 2026 Queen&apos;s Young Caregivers Community. In partnership with the Ontario Caregiver Organization.</p>
+              </div>
+            </footer>
+          </div>
+        )}
+
+        {!isUnlocked && isAuthPortalOpen && !showRoleApplication && (
           <section className="mx-auto w-full max-w-3xl rounded-lg border border-[#d3d1c8] bg-white p-6 shadow-sm sm:p-8">
             <p className="text-xs font-bold uppercase text-[#2a3723]">
               Peer Support Portal
@@ -2009,11 +2995,26 @@ export default function Home() {
                     id="signup-role"
                     value={signupRole}
                     onChange={(event) => setSignupRole(event.target.value)}
-                    className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
+                    disabled={isSignupRoleLocked}
+                    aria-describedby={isSignupRoleLocked ? "signup-role-note" : undefined}
+                    className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2 disabled:cursor-not-allowed disabled:bg-[#f1f0eb] disabled:text-[#2a3723] disabled:opacity-100"
                   >
-                    <option value="mentee">Caregiver</option>
-                    <option value="mentor">Volunteer</option>
+                    {isSignupRoleLocked ? (
+                      <option value={signupRole}>
+                        {signupRole === "mentor" ? "Volunteer" : "Caregiver"}
+                      </option>
+                    ) : (
+                      <>
+                        <option value="mentee">Caregiver</option>
+                        <option value="mentor">Volunteer</option>
+                      </>
+                    )}
                   </select>
+                  {isSignupRoleLocked && (
+                    <p id="signup-role-note" className="-mt-1 text-xs text-[#666b60]">
+                      This account type was selected on the previous page.
+                    </p>
+                  )}
 
                   <label
                     htmlFor="signup-username"
@@ -3384,10 +4385,57 @@ export default function Home() {
                   )}
                 </section>
 
+                <section
+                  id="program-applications"
+                  className="admin-section mt-10 space-y-5 border-t border-[#d3d1c8] pt-9"
+                >
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#67705f]">
+                        Screening queue
+                      </p>
+                      <h4 className="mt-1 text-2xl font-extrabold text-[#0c0a08]">
+                        Pending application submissions
+                      </h4>
+                      <p className="mt-2 max-w-3xl text-sm leading-6 text-[#59604f]">
+                        Review the complete caregiver and volunteer interest
+                        forms. Contact details and legal names stay private to
+                        QYCC administrators.
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-[#dfe2d5] px-3 py-1 text-sm font-bold text-[#2a3723]">
+                      {adminProgramApplications.length} pending
+                    </span>
+                  </div>
+
+                  {adminProgramApplications.length === 0 ? (
+                    <article className="rounded-lg border border-dashed border-[#b9bba8] bg-white p-4">
+                      <p className="text-sm text-[#59604f]">
+                        No new application submissions right now.
+                      </p>
+                    </article>
+                  ) : (
+                    <div className="space-y-5">
+                      {adminProgramApplications.map((application) => (
+                        <AdminProgramApplicationCard
+                          key={application.id}
+                          application={application}
+                          isReviewing={adminActionUserId === application.id}
+                          onReview={handleProgramApplicationAction}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </section>
+
                 <div className="admin-section mt-10 space-y-4 border-t border-[#d3d1c8] pt-9">
                   <h4 className="text-2xl font-extrabold text-[#0c0a08]">
-                    Pending applications
+                    Pending member account approvals
                   </h4>
+                  <p className="text-sm text-[#59604f]">
+                    Legacy account-based applications that already have a
+                    Supabase Auth profile.
+                  </p>
                   {adminPendingUsers.length === 0 ? (
                     <article className="rounded-lg border border-dashed border-[#b9bba8] bg-white p-4">
                       <p className="text-sm text-[#59604f]">
@@ -3503,9 +4551,40 @@ export default function Home() {
                   )}
                 </div>
 
+                <section className="admin-section mt-10 space-y-5 border-t border-[#d3d1c8] pt-9">
+                  <div>
+                    <h4 className="text-2xl font-extrabold text-[#0c0a08]">
+                      Reviewed application submissions
+                    </h4>
+                    <p className="mt-2 text-sm text-[#59604f]">
+                      Previously approved or rejected caregiver and volunteer
+                      interest forms.
+                    </p>
+                  </div>
+                  {adminReviewedProgramApplications.length === 0 ? (
+                    <article className="rounded-lg border border-dashed border-[#b9bba8] bg-white p-4">
+                      <p className="text-sm text-[#59604f]">
+                        No reviewed application submissions yet.
+                      </p>
+                    </article>
+                  ) : (
+                    <div className="space-y-5">
+                      {adminReviewedProgramApplications.map((application) => (
+                        <AdminProgramApplicationCard
+                          key={`reviewed-program-${application.id}`}
+                          application={application}
+                          isReviewing={false}
+                          onReview={handleProgramApplicationAction}
+                          reviewed
+                        />
+                      ))}
+                    </div>
+                  )}
+                </section>
+
                 <div className="admin-section mt-10 space-y-4 border-t border-[#d3d1c8] pt-9">
                   <h4 className="text-2xl font-extrabold text-[#0c0a08]">
-                    Reviewed applications
+                    Reviewed member accounts
                   </h4>
                   <p className="text-sm text-[#59604f]">
                     View previously approved/rejected requests and update their
