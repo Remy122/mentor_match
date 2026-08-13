@@ -40,7 +40,6 @@ def test_create_caregiver_application_without_school(
             "support_requested": "Someone who understands burnout.",
             "communication_preference": "Text",
             "accessibility_needs": None,
-            "additional_information": "Evenings are easiest.",
             "consent_acknowledged": True,
         },
     )

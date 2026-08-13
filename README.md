@@ -27,9 +27,10 @@ Frontend env setup:
 Supabase Auth setup:
 
 - In the Supabase dashboard, open Authentication > Providers > Email.
-- Turn off `Confirm email`. The portal uses immediate email/password signup;
-  admin profile approval remains the gate before a new user can access portal
-  features.
+- Configure the Site URL and redirect URLs for both localhost and production.
+- New members submit an application first. When a coordinator accepts it,
+  Supabase sends a secure invitation that lets the member choose their own
+  password. Administrators never receive or view member passwords.
 
 ## Backend (FastAPI)
 

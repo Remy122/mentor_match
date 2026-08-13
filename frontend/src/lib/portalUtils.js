@@ -63,7 +63,7 @@ export function normalizeMentor(mentor) {
 
   return {
     id: mentor.id,
-    name: mentor.full_name ?? "Unnamed volunteer",
+    name: mentor.preferred_name ?? mentor.full_name ?? "Unnamed peer support volunteer",
     university: formatUniversity(mentor.university),
     city: availabilityInfo.mentorMode,
     availability: availabilityInfo.availability || "Not listed",

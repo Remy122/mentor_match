@@ -45,3 +45,4 @@ class MeResponse(BaseModel):
     profile: dict
     mentor_profile: dict | None = None
     mentee_profile: dict | None = None
+    application: dict | None = None

@@ -136,7 +136,7 @@ def test_matching_lifecycle_and_resubmission(client, fake_supabase, monkeypatch)
     )
     assert create_response.status_code == 200
     payload = create_response.json()
-    assert payload["match"]["status"] == "pending"
+    assert payload["match"]["status"] == "requested"
     assert payload["is_resubmission"] is False
 
     duplicate_response = client.post(
@@ -149,7 +149,7 @@ def test_matching_lifecycle_and_resubmission(client, fake_supabase, monkeypatch)
     assert duplicate_response.status_code == 400
     assert "open request" in duplicate_response.json()["detail"]
 
-    fake_supabase.tables["matches"][0]["status"] = "cancelled"
+    fake_supabase.tables["matches"][0]["status"] = "closed"
     resubmit_response = client.post(
         "/api/matches/requests",
         json={
@@ -161,7 +161,7 @@ def test_matching_lifecycle_and_resubmission(client, fake_supabase, monkeypatch)
     resubmit_payload = resubmit_response.json()
     assert resubmit_payload["is_resubmission"] is True
     reopened = fake_supabase.tables["matches"][0]
-    assert reopened["status"] == "pending"
+    assert reopened["status"] == "requested"
     assert reopened["care_type"] == "Mental health and emotional support"
     assert len(sent_emails) >= 3
 
@@ -217,7 +217,7 @@ def test_mentor_decision_and_hours_logging(client, fake_supabase, monkeypatch):
             "id": 55,
             "mentor_id": "mentor-1",
             "mentee_id": "mentee-1",
-            "status": "pending",
+            "status": "requested",
             "care_type": "General caregiving guidance",
             "request_message": "Initial mentee note.",
             "created_at": "2026-05-04T12:00:00Z",
@@ -251,6 +251,29 @@ def test_mentor_decision_and_hours_logging(client, fake_supabase, monkeypatch):
     assert (
         active_requests_response.json()["requests"][0]["mentee_email"]
         == "mentee@example.com"
+    )
+
+    message_response = client.post(
+        "/api/matches/55/messages",
+        json={"body": "Hello — I am glad we connected."},
+    )
+    assert message_response.status_code == 201
+    messages_response = client.get("/api/matches/55/messages")
+    assert messages_response.status_code == 200
+    assert messages_response.json()["messages"][0]["sender_id"] == "mentor-1"
+
+    app.dependency_overrides[require_auth] = lambda: AuthUser(
+        id="not-a-participant",
+        email="outsider@example.com",
+        claims={},
+    )
+    outsider_response = client.get("/api/matches/55/messages")
+    assert outsider_response.status_code == 404
+
+    app.dependency_overrides[require_auth] = lambda: AuthUser(
+        id="mentor-1",
+        email="mentor@example.com",
+        claims={},
     )
 
     second_decision = client.post(
@@ -337,17 +360,18 @@ def test_decline_status_and_one_active_match_guard(client, fake_supabase, monkey
     ]
     fake_supabase.tables["matches"] = [
         {"id": 1, "mentor_id": "mentor-1", "mentee_id": "mentee-1", "status": "active", "created_at": "2026-01-01T00:00:00Z"},
-        {"id": 2, "mentor_id": "mentor-2", "mentee_id": "mentee-1", "status": "pending", "created_at": "2026-01-02T00:00:00Z"},
+        {"id": 2, "mentor_id": "mentor-2", "mentee_id": "mentee-1", "status": "requested", "created_at": "2026-01-02T00:00:00Z"},
     ]
     app.dependency_overrides[require_auth] = lambda: AuthUser(id="mentor-2", email="two@example.com", claims={})
 
     blocked_accept = client.post("/api/matches/2/mentor-decision", json={"decision": "accept"})
     assert blocked_accept.status_code == 409
-    assert fake_supabase.tables["matches"][1]["status"] == "pending"
+    assert fake_supabase.tables["matches"][1]["status"] == "requested"
 
     declined = client.post("/api/matches/2/mentor-decision", json={"decision": "reject"})
     assert declined.status_code == 200
-    assert fake_supabase.tables["matches"][1]["status"] == "declined"
+    assert fake_supabase.tables["matches"][1]["status"] == "closed"
+    assert fake_supabase.tables["matches"][1]["closed_reason"] == "Declined by peer support volunteer"
 
 
 def test_admin_match_action_is_university_scoped_and_hours_require_approval(
@@ -380,7 +404,7 @@ def test_admin_match_action_is_university_scoped_and_hours_require_approval(
             "id": 91,
             "mentor_id": "mentor-1",
             "mentee_id": "mentee-1",
-            "status": "pending",
+            "status": "requested",
         }
     ]
     app.dependency_overrides[require_admin_role] = lambda: AuthUser(
@@ -394,7 +418,7 @@ def test_admin_match_action_is_university_scoped_and_hours_require_approval(
 
     cross_university_match = client.post("/api/matches/91/accept")
     assert cross_university_match.status_code == 404
-    assert fake_supabase.tables["matches"][0]["status"] == "pending"
+    assert fake_supabase.tables["matches"][0]["status"] == "requested"
 
     fake_supabase.tables["profiles"][2]["university"] = "University of Toronto"
     same_university_match = client.post("/api/matches/91/accept")

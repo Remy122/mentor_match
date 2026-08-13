@@ -161,7 +161,7 @@ def test_admin_approve_reject_and_remove_access(client, fake_supabase, monkeypat
             "id": 11,
             "mentor_id": "mentor-1",
             "mentee_id": "mentee-1",
-            "status": "pending",
+                "status": "requested",
             "care_type": "Navigation",
             "created_at": "2026-01-02T00:00:00Z",
         }
@@ -185,7 +185,7 @@ def test_admin_approve_reject_and_remove_access(client, fake_supabase, monkeypat
     admin_match = matches_response.json()["matches"][0]
     assert admin_match["volunteer_profile"]["full_name"] == "Mentor One"
     assert admin_match["caregiver_profile"]["full_name"] == "Mentee One"
-    assert matches_response.json()["status_counts"] == {"pending": 1}
+    assert matches_response.json()["status_counts"] == {"requested": 1}
 
     approve_response = client.post("/api/admin/users/mentor-1/approve")
     assert approve_response.status_code == 200
@@ -203,7 +203,7 @@ def test_admin_approve_reject_and_remove_access(client, fake_supabase, monkeypat
     assert mentor["approval_status"] == "rejected"
     assert mentor["is_visible"] is False
     match = fake_supabase.tables["matches"][0]
-    assert match["status"] == "cancelled"
+    assert match["status"] == "closed"
 
 
 def test_large_admin_response_is_compressed(client, fake_supabase, monkeypatch):
@@ -356,3 +356,51 @@ def test_admin_university_scope_preapprovals_and_profile_management(
     assert created_admin.status_code == 200
     assert created_admin.json()["profile"]["role"] == "admin"
     assert created_admin.json()["profile"]["is_super_admin"] is False
+
+
+def test_application_approval_sends_secure_invitation_and_creates_unified_profile(
+    client, fake_supabase, monkeypatch
+):
+    _wire_supabase(monkeypatch, fake_supabase)
+    fake_supabase.tables["program_applications"] = [
+        {
+            "id": "application-1",
+            "application_type": "volunteer",
+            "full_legal_name": "Taylor Volunteer",
+            "preferred_name": "Taylor",
+            "email": "taylor@example.com",
+            "phone_number": "416-555-0101",
+            "university": "University of Toronto",
+            "status": "pending",
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+    ]
+    app.dependency_overrides[require_admin_role] = lambda: AuthUser(
+        id="admin-1",
+        email="admin@example.com",
+        claims={},
+        role="admin",
+        university="University of Toronto",
+        approval_status="approved",
+    )
+
+    response = client.post("/api/admin/program-applications/application-1/approve")
+
+    assert response.status_code == 200
+    assert "secure account invitation" in response.json()["message"]
+    invited_user_id = response.json()["application"]["user_id"]
+    profile = next(row for row in fake_supabase.tables["profiles"] if row["id"] == invited_user_id)
+    assert profile["preferred_name"] == "Taylor"
+    assert profile["account_status"] == "invited"
+    assert profile["onboarding_status"] == "training"
+    assert profile["assigned_coordinator"] == "admin-1"
+    assert "password" not in fake_supabase.users[invited_user_id]
+
+    app.dependency_overrides[require_auth] = lambda: AuthUser(
+        id=invited_user_id,
+        email="taylor@example.com",
+        claims={},
+    )
+    completed = client.post("/api/auth/complete-invitation")
+    assert completed.status_code == 200
+    assert completed.json()["profile"]["account_status"] == "active"

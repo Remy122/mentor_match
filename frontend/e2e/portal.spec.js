@@ -29,12 +29,17 @@ function profileFor(role, approvalStatus, isSuperAdmin) {
     role,
     username: `${role}_e2e`,
     full_name: names[role],
+    preferred_name: names[role].split(" ")[0],
+    legal_name: names[role],
     bio: `E2E ${role} profile`,
     university: "University of Toronto",
     approval_status: approvalStatus,
     is_visible: role === "mentor" && approvalStatus === "approved",
     same_university_only: true,
     is_super_admin: isSuperAdmin,
+    account_status: "active",
+    onboarding_status: "ready",
+    stage_started_at: CREATED_AT,
     created_at: CREATED_AT,
   };
 }
@@ -59,6 +64,16 @@ function roleProfileResponse(state) {
             id: state.profile.id,
             goals: "Find practical peer support",
             interests: ["Hospital navigation", "Burnout prevention"],
+          }
+        : null,
+    application:
+      state.profile.role === "mentee"
+        ? {
+            id: "caregiver-application",
+            preferred_name: state.profile.preferred_name,
+            caregiving_situation: "I support a parent while balancing school.",
+            support_requested: "Practical peer support and encouragement.",
+            communication_preference: "Text",
           }
         : null,
   };
@@ -104,6 +119,8 @@ async function installPortalMocks(
     approvalStatus = "approved",
     isSuperAdmin = false,
     university = "University of Toronto",
+    accountStatus = "active",
+    onboardingStatus = "ready",
   } = {},
 ) {
   const torontoVolunteer = {
@@ -117,6 +134,9 @@ async function installPortalMocks(
     is_visible: true,
     same_university_only: true,
     is_super_admin: false,
+    account_status: "active",
+    onboarding_status: "ready",
+    stage_started_at: CREATED_AT,
     created_at: CREATED_AT,
     mentor_profiles: {
       availability: "Hybrid :: Weekday evenings",
@@ -148,26 +168,40 @@ async function installPortalMocks(
     care_type: "Hospital / appointment navigation",
     created_at: CREATED_AT,
     mentee_email: "alex.caregiver@example.com",
-    mentee_profile: {
+    caregiver_profile: {
       id: "mentee-active",
       full_name: "Alex Active",
+      preferred_name: "Alex",
       bio: "Balancing classes and family appointments.",
       university: "University of Toronto",
+    },
+    caregiver_application: {
+      preferred_name: "Alex",
+      caregiving_situation: "Supporting a parent through appointments.",
+      support_requested: "Hospital navigation",
+      communication_preference: "Email",
     },
   };
   const pendingRequest = {
     id: 401,
     mentor_id: "mentor-e2e",
     mentee_id: "mentee-pending",
-    status: "pending",
+    status: "requested",
     care_type: "Mental health and emotional support",
     created_at: CREATED_AT,
-    mentee_email: "pat.caregiver@example.com",
-    mentee_profile: {
+    mentee_email: null,
+    caregiver_profile: {
       id: "mentee-pending",
       full_name: "Pat Pending",
+      preferred_name: "Pat",
       bio: "Looking for someone who understands caregiving stress.",
       university: "University of Toronto",
+    },
+    caregiver_application: {
+      preferred_name: "Pat",
+      caregiving_situation: "Balancing caregiving stress with school.",
+      support_requested: "Mental health and emotional support",
+      communication_preference: "Text",
     },
   };
   const pendingAdminUser = {
@@ -181,6 +215,9 @@ async function installPortalMocks(
     is_visible: false,
     same_university_only: true,
     is_super_admin: false,
+    account_status: "active",
+    onboarding_status: "ready",
+    stage_started_at: CREATED_AT,
     created_at: CREATED_AT,
     mentor_profiles: null,
     mentee_profiles: {
@@ -264,6 +301,9 @@ async function installPortalMocks(
     unhandledRoutes: [],
   };
   state.profile.university = university;
+  state.profile.account_status = accountStatus;
+  state.profile.onboarding_status = onboardingStatus;
+  if (role === "admin") state.adminUsers.unshift(state.profile);
 
   page.on("console", (message) => {
     if (message.type() === "error") {
@@ -358,6 +398,12 @@ async function installPortalMocks(
       return;
     }
 
+    if (path === "/api/auth/complete-invitation" && method === "POST") {
+      state.profile.account_status = "active";
+      await fulfillJson(route, roleProfileResponse(state));
+      return;
+    }
+
     if (path === "/api/auth/sync-profile" && method === "POST") {
       const body = request.postDataJSON();
       state.lastSyncPayload = body;
@@ -397,7 +443,7 @@ async function installPortalMocks(
         id: 501,
         mentor_id: body.mentor_id,
         mentee_id: state.profile.id,
-        status: "pending",
+        status: "requested",
         care_type: body.care_type,
         created_at: CREATED_AT,
         mentor_email: null,
@@ -426,9 +472,24 @@ async function installPortalMocks(
       const body = request.postDataJSON();
       const requestRow = state.mentorRequests.find((item) => item.id === matchId);
       if (requestRow) {
-        requestRow.status = body.decision === "accept" ? "active" : "declined";
+        requestRow.status = body.decision === "accept" ? "active" : "closed";
       }
-      await fulfillJson(route, { message: "Decision saved." });
+      await fulfillJson(route, {
+        message: body.decision === "accept" ? "Request accepted." : "Request rejected.",
+      });
+      return;
+    }
+
+    if (/^\/api\/matches\/\d+\/messages$/.test(path) && method === "GET") {
+      await fulfillJson(route, { messages: [] });
+      return;
+    }
+
+    if (/^\/api\/matches\/\d+\/messages$/.test(path) && method === "POST") {
+      const body = request.postDataJSON();
+      await fulfillJson(route, {
+        message: { id: 1, match_id: Number(path.split("/")[3]), sender_id: state.profile.id, body: body.body, created_at: CREATED_AT },
+      }, 201);
       return;
     }
 
@@ -510,7 +571,10 @@ async function installPortalMocks(
         application.reviewed_at = CREATED_AT;
       }
       await fulfillJson(route, {
-        message: `Application ${application?.status || "updated"}.`,
+        message:
+          action === "approve"
+            ? "Application accepted and a secure account invitation was emailed."
+            : "Application denied.",
         application,
       });
       return;
@@ -522,6 +586,9 @@ async function installPortalMocks(
         active_mentees: 1,
         current_matches: 1,
         volunteer_hours_total: 2.5,
+        new_applications: state.programApplications.filter((application) => application.status === "pending"),
+        unmatched_volunteers: [state.mentors[0]],
+        awaiting_volunteer_decisions: [state.mentorRequests[0]],
       });
       return;
     }
@@ -540,9 +607,14 @@ async function installPortalMocks(
             mentee_id: "mentee-active",
             status: "active",
             care_type: "General caregiving guidance",
+            requested_at: CREATED_AT,
+            activated_at: CREATED_AT,
             created_at: CREATED_AT,
             volunteer_profile: state.mentors[0],
-            caregiver_profile: activeRequest.mentee_profile,
+            caregiver_profile: activeRequest.caregiver_profile,
+            meeting_logs: [],
+            total_meetings: 0,
+            total_hours: 0,
           },
         ],
         status_counts: { active: 1 },
@@ -552,6 +624,31 @@ async function installPortalMocks(
 
     if (path === "/api/admin/users" && method === "GET") {
       await fulfillJson(route, { users: state.adminUsers });
+      return;
+    }
+
+    if (/^\/api\/admin\/users\/[^/]+$/.test(path) && method === "PATCH") {
+      const userId = path.split("/")[4];
+      const body = request.postDataJSON();
+      const target = state.adminUsers.find((user) => user.id === userId);
+      if (target) Object.assign(target, body);
+      await fulfillJson(route, { message: "Profile updated.", profile: target });
+      return;
+    }
+
+    if (/^\/api\/admin\/users\/[^/]+\/lifecycle$/.test(path) && method === "POST") {
+      const userId = path.split("/")[4];
+      const body = request.postDataJSON();
+      const target = state.adminUsers.find((user) => user.id === userId);
+      if (target) target.account_status = body.action === "reactivate" ? "active" : body.action === "delete" ? "deleted" : "suspended";
+      await fulfillJson(route, { message: `Account ${body.action}d.`, profile: target });
+      return;
+    }
+
+    if (/^\/api\/admin\/matches\/\d+$/.test(path) && method === "PATCH") {
+      const matchId = Number(path.split("/")[4]);
+      const body = request.postDataJSON();
+      await fulfillJson(route, { message: "Match status updated.", match: { id: matchId, status: body.status } });
       return;
     }
 
@@ -726,10 +823,10 @@ test("public caregiver and volunteer applications match the reference flow", asy
   ).toBeVisible();
 
   await page
-    .getByLabel("Full legal name * (Used internally only)", { exact: true })
+    .getByLabel("Full name *", { exact: true })
     .fill("Morgan Volunteer");
   await page
-    .getByLabel("Preferred name * (Shown on your public profile)", { exact: true })
+    .getByLabel("Preferred name *", { exact: true })
     .fill("Morgan");
   await page.getByLabel("Email *", { exact: true }).fill("morgan@example.com");
   await page.getByLabel("Phone number *", { exact: true }).fill("647-555-0100");
@@ -762,10 +859,10 @@ test("public caregiver and volunteer applications match the reference flow", asy
   await page.getByRole("button", { name: "For caregivers", exact: true }).click();
 
   await page
-    .getByLabel("Full legal name * (Used internally only)", { exact: true })
+    .getByLabel("Full name *", { exact: true })
     .fill("New Caregiver");
   await page
-    .getByLabel("Preferred name * (Shown to your volunteer match)", { exact: true })
+    .getByLabel("Preferred name *", { exact: true })
     .fill("Casey");
   await page.getByLabel("Email *", { exact: true }).fill("new.caregiver@example.com");
   await page.getByLabel("Phone number *", { exact: true }).fill("416-555-0100");
@@ -805,6 +902,26 @@ test("public caregiver and volunteer applications match the reference flow", asy
   await expectHealthyPage(page, state);
 });
 
+test("invited member creates a private password before onboarding", async ({ page }) => {
+  const state = await installPortalMocks(page, {
+    role: "mentee",
+    accountStatus: "invited",
+    onboardingStatus: "profile_pending",
+  });
+  await signIn(page, state);
+
+  await expect(page.getByRole("heading", { name: "Create your password" })).toBeVisible();
+  await page.getByLabel("New password").fill("PrivatePass123!");
+  await page.getByLabel("Confirm password").fill("PrivatePass123!");
+  await page.getByRole("button", { name: "Create password" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Complete your bio to activate your caregiver account." }),
+  ).toBeVisible();
+  expect(state.profile.account_status).toBe("active");
+  await expectHealthyPage(page, state);
+});
+
 test("caregiver browses across universities and sends one match request", async ({ page }) => {
   const state = await installPortalMocks(page, { role: "mentee" });
   await signIn(page, state);
@@ -838,7 +955,7 @@ test("caregiver browses across universities and sends one match request", async 
 
   await page.getByRole("button", { name: "View request status" }).click();
   await expect(page.getByRole("heading", { name: "Your sent requests" })).toBeVisible();
-  await expect(page.getByText("Status: pending", { exact: false })).toBeVisible();
+  await expect(page.getByText("Status: requested", { exact: false })).toBeVisible();
   await expectHealthyPage(page, state);
 });
 
@@ -847,14 +964,14 @@ test("volunteer accepts requests and logs hours with topics and flags", async ({
   await signIn(page, state);
 
   await expect(page.getByRole("heading", { name: "Caregiver requests" })).toBeVisible();
-  const pendingCard = page.locator("article.request-record").filter({ hasText: "Pat Pending" });
+  const pendingCard = page.locator("article.request-record").filter({ hasText: "Pat" });
   await pendingCard.getByRole("button", { name: "Accept request" }).click();
   await expect(page.getByText("Caregiver request accepted.")).toBeVisible();
 
   await page.getByRole("button", { name: "My caregivers" }).click();
   await expect(page.getByRole("heading", { name: "My caregivers" })).toBeVisible();
-  await expect(page.getByText("Pat Pending", { exact: true })).toBeVisible();
-  await expect(page.getByText("Alex Active", { exact: true })).toBeVisible();
+  await expect(page.getByText("Pat", { exact: true })).toBeVisible();
+  await expect(page.getByText("Alex", { exact: true })).toBeVisible();
 
   await page.getByLabel("Meeting date").fill("2026-08-04");
   await page.getByLabel("Hours").fill("1.5");
@@ -880,9 +997,14 @@ test("normal admin is limited to one university while managing applications", as
   const state = await installPortalMocks(page, { role: "admin" });
   await signIn(page, state);
 
-  await expect(page.getByRole("heading", { name: "Admin dashboard" })).toBeVisible();
-  await expect(page.getByText("University of Toronto workspace.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What needs attention" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dashboard", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Applications", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "People", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Matches", exact: true })).toBeVisible();
   await expect(page.getByText("We couldn't load this information.")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Applications", exact: true }).click();
 
   const programApplication = page.getByTestId(
     "program-application-program-volunteer-pending",
@@ -909,13 +1031,10 @@ test("normal admin is limited to one university while managing applications", as
   }
 
   await programApplication
-    .getByRole("button", { name: "Approve application", exact: true })
+    .getByRole("button", { name: "Accept and send invite", exact: true })
     .click();
   await expect(
-    page.getByText(
-      "Application approved. Create or invite the member account when ready.",
-      { exact: true },
-    ),
+    page.getByText("Application accepted and a secure account invitation was emailed.", { exact: true }),
   ).toBeVisible();
   expect(
     state.programApplications.find(
@@ -923,38 +1042,10 @@ test("normal admin is limited to one university while managing applications", as
     ).status,
   ).toBe("approved");
 
-  const inviteSection = page.locator("form").filter({
-    has: page.getByRole("button", { name: "Preapprove", exact: true }),
-  });
-  const inviteUniversity = inviteSection.getByRole("combobox", {
-    name: "University",
-    exact: true,
-  });
-  await expect(inviteUniversity).toBeDisabled();
-  await expect(inviteUniversity).toHaveValue("University of Toronto");
-  await inviteSection.getByLabel("Email", { exact: true }).fill("approved@example.com");
-  await inviteSection.getByRole("button", { name: "Preapprove" }).click();
-  await expect(page.getByText("Email preapproved.", { exact: false })).toBeVisible();
-  await expect(page.getByText("approved@example.com", { exact: true })).toBeVisible();
-
-  const pendingApplication = page.locator("article").filter({ hasText: "Pending Caregiver" });
-  await pendingApplication.getByRole("button", { name: "Approve" }).click();
-  await expect(page.getByText("Request approved successfully.")).toBeVisible();
-
-  const profileSection = page.locator("form").filter({
-    has: page.getByRole("button", { name: "Create account", exact: true }),
-  });
-  await expect(
-    profileSection.getByRole("combobox", { name: "University", exact: true }),
-  ).toBeDisabled();
-  const normalAdminRole = profileSection.getByRole("combobox", {
-    name: "Role",
-    exact: true,
-  });
-  await expect(normalAdminRole).toBeVisible();
-  await expect(
-    normalAdminRole.locator('option[value="admin"]'),
-  ).toHaveCount(0);
+  await page.getByRole("button", { name: "People", exact: true }).click();
+  await expect(page.getByText("Pending Caregiver", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Filter by assigned coordinator")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Preapproved signup emails" })).toHaveCount(0);
   await expectHealthyPage(page, state);
 });
 
@@ -976,43 +1067,19 @@ test("admin without a university sees a setup state instead of a failed dashboar
   await expectHealthyPage(page, state);
 });
 
-test("super-admin can choose universities and create normal admin accounts", async ({ page }) => {
+test("super-admin can oversee administrators in the unified people directory", async ({ page }) => {
   const state = await installPortalMocks(page, {
     role: "admin",
     isSuperAdmin: true,
   });
   await signIn(page, state);
 
-  await expect(
-    page.getByText("Super-admin workspace across all Ontario universities."),
-  ).toBeVisible();
-  const profileSection = page.locator("form").filter({
-    has: page.getByRole("button", { name: "Create account", exact: true }),
-  });
-  const university = profileSection.getByRole("combobox", {
-    name: "University",
-    exact: true,
-  });
-  await expect(university).toBeEnabled();
-  const role = profileSection.getByRole("combobox", {
-    name: "Role",
-    exact: true,
-  });
-  await expect(role.locator('option[value="admin"]')).toHaveCount(1);
-
-  await profileSection.getByRole("textbox", { name: "Login email" }).fill("new.admin@example.com");
-  await profileSection.getByRole("textbox", { name: "Temporary password" }).fill("Temporary123!");
-  await role.selectOption("admin");
-  await profileSection.getByRole("textbox", { name: "Username", exact: true }).fill("new_admin");
-  await profileSection.getByRole("textbox", { name: "Full name", exact: true }).fill("New University Admin");
-  await university.selectOption("University of Waterloo");
-  await profileSection.getByRole("button", { name: "Create account" }).click();
-
-  await expect(page.getByText("Account and profile created.")).toBeVisible();
-  await expect(page.getByText("New University Admin", { exact: true })).toBeVisible();
-  const created = state.adminUsers.find((user) => user.username === "new_admin");
-  expect(created.role).toBe("admin");
-  expect(created.university).toBe("University of Waterloo");
-  expect(created.is_super_admin).toBe(false);
+  await page.getByRole("button", { name: "People", exact: true }).click();
+  await page.getByLabel("Filter by role").selectOption("admin");
+  const superAdminRow = page.getByRole("button", { name: /Jay Administrator/ });
+  await expect(superAdminRow).toBeVisible();
+  await superAdminRow.click();
+  await expect(page.getByText("Administrator", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Delete account" })).toHaveCount(0);
   await expectHealthyPage(page, state);
 });

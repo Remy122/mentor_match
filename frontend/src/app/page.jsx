@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   apiFetch,
   BACKEND_BASE_URL,
@@ -13,7 +13,6 @@ import {
 } from "../lib/portalUtils";
 import {
   ONTARIO_POSTSECONDARY_INSTITUTIONS,
-  ONTARIO_UNIVERSITIES,
 } from "../lib/ontarioUniversities";
 import { supabase, hasSupabaseEnv } from "../lib/supabaseClient";
 
@@ -51,13 +50,25 @@ const EMPTY_PROGRAM_APPLICATION = {
   supportRequested: "",
   communicationPreference: "",
   accessibilityNeeds: "",
-  additionalInformation: "",
   volunteerMotivation: "",
   caregivingExperience: "",
   otherRelevantExperience: "",
   schoolProgramInterest: "",
   consentAcknowledged: false,
 };
+
+function daysSince(value) {
+  if (!value) return 0;
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) return 0;
+  return Math.max(0, Math.floor((Date.now() - then) / 86400000));
+}
+
+function roleLabel(role) {
+  if (role === "mentor") return "Peer support volunteer";
+  if (role === "mentee") return "Caregiver";
+  return role === "admin" ? "Administrator" : role;
+}
 
 const ERROR_MESSAGES = {
   load: "We couldn't load this information. Please try again.",
@@ -161,7 +172,6 @@ function AdminProgramApplicationCard({
         ["Support requested", application.support_requested],
         ["Communication preference", application.communication_preference],
         ["Accessibility needs", application.accessibility_needs],
-        ["Additional information", application.additional_information],
       ];
 
   return (
@@ -172,7 +182,7 @@ function AdminProgramApplicationCard({
       <div className="admin-application-heading">
         <div>
           <div className="admin-application-badges">
-            <span>{isVolunteer ? "Volunteer" : "Caregiver"}</span>
+            <span>{isVolunteer ? "Peer support volunteer" : "Caregiver"}</span>
             <span className={`request-status request-status-${application.status}`}>
               {application.status}
             </span>
@@ -190,7 +200,7 @@ function AdminProgramApplicationCard({
               disabled={isReviewing}
               className="admin-application-approve"
             >
-              Approve application
+              Accept and send invite
             </button>
             <button
               type="button"
@@ -254,6 +264,313 @@ function AdminProgramApplicationCard({
   );
 }
 
+function MatchMessagePanel({ matchId, currentUserId }) {
+  const [messages, setMessages] = useState([]);
+  const [body, setBody] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const loadMessages = useCallback(async () => {
+    const token = window.localStorage.getItem("ocgoAccessToken");
+    if (!token) return;
+    try {
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/matches/${matchId}/messages`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      setMessages(data.messages ?? []);
+      setError("");
+    } catch {
+      setError("Messages could not be loaded.");
+    }
+  }, [matchId]);
+
+  useEffect(() => {
+    loadMessages();
+  }, [loadMessages]);
+
+  async function sendMessage(event) {
+    event.preventDefault();
+    if (!body.trim()) return;
+    const token = window.localStorage.getItem("ocgoAccessToken");
+    setSaving(true);
+    try {
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/matches/${matchId}/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ body: body.trim() }),
+      });
+      if (!response.ok) throw new Error();
+      setBody("");
+      await loadMessages();
+    } catch {
+      setError("Your message could not be sent.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="match-messages">
+      <div className="match-messages-heading">
+        <h5>Private match messages</h5>
+        <button type="button" onClick={loadMessages}>Refresh</button>
+      </div>
+      <div className="match-message-list" aria-live="polite">
+        {messages.length === 0 ? (
+          <p>No messages yet. Start the conversation here.</p>
+        ) : messages.map((message) => (
+          <article
+            key={message.id}
+            className={message.sender_id === currentUserId ? "match-message-own" : ""}
+          >
+            <p>{message.body}</p>
+            <time>{message.created_at ? new Date(message.created_at).toLocaleString() : ""}</time>
+          </article>
+        ))}
+      </div>
+      {error && <p className="match-message-error">{error}</p>}
+      <form onSubmit={sendMessage} className="match-message-form">
+        <label htmlFor={`match-message-${matchId}`}>Write a message</label>
+        <textarea
+          id={`match-message-${matchId}`}
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          maxLength={4000}
+          rows={3}
+        />
+        <button type="submit" disabled={saving || !body.trim()}>
+          {saving ? "Sending..." : "Send message"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function AdminWorkspace({
+  section,
+  onSectionChange,
+  metrics,
+  applications,
+  reviewedApplications,
+  users,
+  matches,
+  loading,
+  error,
+  success,
+  actionId,
+  onReviewApplication,
+  onSavePerson,
+  onLifecycle,
+  onMatchStatus,
+  isSuperAdmin,
+}) {
+  const [roleFilter, setRoleFilter] = useState("all");
+  const [institutionFilter, setInstitutionFilter] = useState("all");
+  const [accountFilter, setAccountFilter] = useState("all");
+  const [onboardingFilter, setOnboardingFilter] = useState("all");
+  const [availabilityFilter, setAvailabilityFilter] = useState("all");
+  const [coordinatorFilter, setCoordinatorFilter] = useState("all");
+  const [selectedPersonId, setSelectedPersonId] = useState("");
+  const [personDraft, setPersonDraft] = useState(null);
+  const [matchFilter, setMatchFilter] = useState("all");
+  const [selectedMatchId, setSelectedMatchId] = useState("");
+
+  const institutions = [...new Set(users.map((user) => formatUniversity(user.university)))].sort();
+  const coordinators = users.filter((user) => user.role === "admin");
+  const filteredUsers = users.filter((user) => {
+    const isAvailable = user.role === "mentor" && Boolean(user.is_visible);
+    return (roleFilter === "all" || user.role === roleFilter)
+      && (institutionFilter === "all" || formatUniversity(user.university) === institutionFilter)
+      && (accountFilter === "all" || (user.account_status ?? "active") === accountFilter)
+      && (onboardingFilter === "all" || (user.onboarding_status ?? "ready") === onboardingFilter)
+      && (availabilityFilter === "all" || (availabilityFilter === "available") === isAvailable)
+      && (coordinatorFilter === "all" || (user.assigned_coordinator || "unassigned") === coordinatorFilter);
+  });
+  const selectedPerson = users.find((user) => user.id === selectedPersonId);
+  const canManageSelected = Boolean(
+    selectedPerson && (isSuperAdmin || selectedPerson.role !== "admin"),
+  );
+  function selectPerson(user) {
+    setSelectedPersonId(user.id);
+    setPersonDraft({
+      preferred_name: user.preferred_name || user.full_name || "",
+      legal_name: user.legal_name || user.full_name || "",
+      phone_number: user.phone_number || "",
+      university: user.university === "University not selected" ? "" : user.university || "",
+      bio: user.bio || "",
+      onboarding_status: user.onboarding_status || "ready",
+      assigned_coordinator: user.assigned_coordinator || "",
+      is_visible: Boolean(user.is_visible),
+    });
+  }
+  const filteredMatches = matches.filter((match) => matchFilter === "all" || match.status === matchFilter);
+  const selectedMatch = matches.find((match) => String(match.id) === String(selectedMatchId));
+  const tabs = ["dashboard", "applications", "people", "matches"];
+
+  return (
+    <section className="admin-workspace-v2">
+      <nav className="admin-primary-tabs" aria-label="Admin sections">
+        {tabs.map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            className={section === tab ? "active" : ""}
+            onClick={() => onSectionChange(tab)}
+          >
+            {tab[0].toUpperCase() + tab.slice(1)}
+          </button>
+        ))}
+      </nav>
+      {loading && <p className="admin-notice">Loading admin workspace...</p>}
+      {error && <p className="admin-notice admin-notice-error">{error}</p>}
+      {success && <p className="admin-notice admin-notice-success">{success}</p>}
+
+      {section === "dashboard" && (
+        <div className="admin-view-stack">
+          <header className="admin-view-header">
+            <p>Action-oriented summary</p>
+            <h3>What needs attention</h3>
+          </header>
+          <div className="admin-summary-grid">
+            <article><span>New applications</span><strong>{metrics?.new_applications?.length ?? applications.length}</strong></article>
+            <article><span>Available unmatched volunteers</span><strong>{metrics?.unmatched_volunteers?.length ?? 0}</strong></article>
+            <article><span>Awaiting volunteer decisions</span><strong>{metrics?.awaiting_volunteer_decisions?.length ?? 0}</strong></article>
+            <article><span>Active matches</span><strong>{metrics?.current_matches ?? 0}</strong></article>
+          </div>
+          <section className="admin-action-group">
+            <div><h4>New applications</h4><button type="button" onClick={() => onSectionChange("applications")}>View all</button></div>
+            {(metrics?.new_applications ?? applications).slice(0, 5).map((application) => (
+              <article key={application.id} className="admin-action-row">
+                <div><strong>{application.preferred_name}</strong><span>{application.application_type === "volunteer" ? "Peer support volunteer" : "Caregiver"} · {formatUniversity(application.university)}</span></div>
+                <span>{daysSince(application.created_at)} days waiting</span>
+              </article>
+            ))}
+          </section>
+          <section className="admin-action-group">
+            <div><h4>Available unmatched peer support volunteers</h4></div>
+            {(metrics?.unmatched_volunteers ?? []).map((volunteer) => (
+              <article key={volunteer.id} className="admin-action-row">
+                <div><strong>{volunteer.preferred_name}</strong><span>{formatUniversity(volunteer.university)}</span></div>
+                <span>{daysSince(volunteer.stage_started_at)} days waiting</span>
+              </article>
+            ))}
+          </section>
+          <section className="admin-action-group">
+            <div><h4>Match requests awaiting a volunteer decision</h4></div>
+            {(metrics?.awaiting_volunteer_decisions ?? []).map((match) => (
+              <article key={match.id} className="admin-action-row">
+                <div><strong>{match.volunteer?.preferred_name || match.volunteer?.full_name}</strong><span>Requested by {match.caregiver?.preferred_name || match.caregiver?.full_name}</span></div>
+                <span>{daysSince(match.requested_at || match.created_at)} days waiting</span>
+              </article>
+            ))}
+          </section>
+        </div>
+      )}
+
+      {section === "applications" && (
+        <div className="admin-view-stack" id="program-applications">
+          <header className="admin-view-header"><p>Screening queue</p><h3>Applications</h3></header>
+          {applications.map((application) => (
+            <AdminProgramApplicationCard key={application.id} application={application} isReviewing={actionId === application.id} onReview={onReviewApplication} />
+          ))}
+          {applications.length === 0 && <p className="admin-empty">No applications need review.</p>}
+          {reviewedApplications.length > 0 && <h4 className="admin-subheading">Reviewed applications</h4>}
+          {reviewedApplications.map((application) => (
+            <AdminProgramApplicationCard key={application.id} application={application} isReviewing={false} onReview={onReviewApplication} reviewed />
+          ))}
+        </div>
+      )}
+
+      {section === "people" && (
+        <div className="admin-view-stack">
+          <header className="admin-view-header"><p>One record per participant</p><h3>People</h3></header>
+          <div className="admin-filter-grid">
+            <select aria-label="Filter by role" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}><option value="all">All roles</option><option value="admin">Administrators</option><option value="mentor">Peer support volunteers</option><option value="mentee">Caregivers</option></select>
+            <select aria-label="Filter by institution" value={institutionFilter} onChange={(e) => setInstitutionFilter(e.target.value)}><option value="all">All institutions</option>{institutions.map((item) => <option key={item}>{item}</option>)}</select>
+            <select aria-label="Filter by account status" value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}><option value="all">All account statuses</option><option value="invited">Invited</option><option value="active">Active</option><option value="suspended">Suspended</option><option value="deleted">Deleted</option></select>
+            <select aria-label="Filter by onboarding status" value={onboardingFilter} onChange={(e) => setOnboardingFilter(e.target.value)}><option value="all">All onboarding</option><option value="profile_pending">Profile pending</option><option value="training">Training</option><option value="ready">Ready</option></select>
+            <select aria-label="Filter by matching availability" value={availabilityFilter} onChange={(e) => setAvailabilityFilter(e.target.value)}><option value="all">All matching availability</option><option value="available">Accepting matches</option><option value="unavailable">Not accepting matches</option></select>
+            <select aria-label="Filter by assigned coordinator" value={coordinatorFilter} onChange={(e) => setCoordinatorFilter(e.target.value)}><option value="all">All coordinators</option><option value="unassigned">Unassigned</option>{coordinators.map((coordinator) => <option key={`coordinator-${coordinator.id}`} value={coordinator.id}>{coordinator.preferred_name || coordinator.full_name}</option>)}</select>
+          </div>
+          <div className="admin-people-list">
+            {filteredUsers.map((user) => (
+              <article key={user.id} className="admin-person-row">
+                <button type="button" onClick={() => selectPerson(user)}>
+                  <strong>{user.preferred_name || user.full_name}</strong>
+                  <span>{roleLabel(user.role)} · {formatUniversity(user.university)}</span>
+                </button>
+                <div><span>{user.account_status ?? "active"}</span><span>{user.onboarding_status ?? "ready"}</span></div>
+              </article>
+            ))}
+          </div>
+          {selectedPerson && (
+            <article className="admin-person-detail">
+              <div className="admin-detail-heading"><div><p>{roleLabel(selectedPerson.role)}</p><h4>{selectedPerson.preferred_name || selectedPerson.full_name}</h4></div><button type="button" onClick={() => setSelectedPersonId("")}>Close</button></div>
+              <dl>
+                <div><dt>Full name</dt><dd>{selectedPerson.legal_name || selectedPerson.full_name}</dd></div>
+                <div><dt>Preferred name</dt><dd>{selectedPerson.preferred_name || selectedPerson.full_name}</dd></div>
+                <div><dt>Email</dt><dd>{selectedPerson.email || "Unavailable"}</dd></div>
+                <div><dt>Phone</dt><dd>{selectedPerson.phone_number || "Unavailable"}</dd></div>
+                <div><dt>Institution</dt><dd>{formatUniversity(selectedPerson.university)}</dd></div>
+                <div><dt>Active matches</dt><dd>{selectedPerson.active_match_count ?? 0}</dd></div>
+                {selectedPerson.role === "mentor" && <div><dt>Accepting new matches</dt><dd>{selectedPerson.is_visible ? "Yes" : "No"}</dd></div>}
+              </dl>
+              {selectedPerson.bio && <section><h5>Bio</h5><p>{selectedPerson.bio}</p></section>}
+              {selectedPerson.application && <section><h5>Application information</h5><p>{selectedPerson.application.application_type === "volunteer" ? selectedPerson.application.volunteer_motivation : selectedPerson.application.caregiving_situation}</p></section>}
+              {personDraft && canManageSelected && (
+                <form className="admin-person-edit-form" onSubmit={(event) => { event.preventDefault(); onSavePerson(selectedPerson.id, personDraft); }}>
+                  <label>Full name<input value={personDraft.legal_name} onChange={(e) => setPersonDraft((current) => ({ ...current, legal_name: e.target.value }))} /></label>
+                  <label>Preferred name<input value={personDraft.preferred_name} onChange={(e) => setPersonDraft((current) => ({ ...current, preferred_name: e.target.value, full_name: e.target.value }))} /></label>
+                  <label>Phone<input value={personDraft.phone_number} onChange={(e) => setPersonDraft((current) => ({ ...current, phone_number: e.target.value }))} /></label>
+                  <label>Institution<select value={personDraft.university} onChange={(e) => setPersonDraft((current) => ({ ...current, university: e.target.value }))}><option value="">Not currently affiliated with a school</option>{ONTARIO_POSTSECONDARY_INSTITUTIONS.map((institution) => <option key={`person-${institution}`} value={institution}>{institution}</option>)}</select></label>
+                  <label>Onboarding<select value={personDraft.onboarding_status} onChange={(e) => setPersonDraft((current) => ({ ...current, onboarding_status: e.target.value }))}><option value="profile_pending">Profile pending</option><option value="training">Training</option><option value="ready">Ready</option></select></label>
+                  <label>Assigned coordinator<select value={personDraft.assigned_coordinator} onChange={(e) => setPersonDraft((current) => ({ ...current, assigned_coordinator: e.target.value }))}><option value="">Unassigned</option>{coordinators.map((coordinator) => <option key={`assign-${coordinator.id}`} value={coordinator.id}>{coordinator.preferred_name || coordinator.full_name}</option>)}</select></label>
+                  {selectedPerson.role === "mentor" && <label className="admin-checkbox"><input type="checkbox" checked={personDraft.is_visible} onChange={(e) => setPersonDraft((current) => ({ ...current, is_visible: e.target.checked }))} />Accepting new matches</label>}
+                  <label className="admin-person-bio">Bio<textarea rows={3} value={personDraft.bio} onChange={(e) => setPersonDraft((current) => ({ ...current, bio: e.target.value }))} /></label>
+                  <button type="submit">Save profile</button>
+                </form>
+              )}
+              {canManageSelected && !selectedPerson.is_super_admin && <div className="admin-detail-actions">
+                {selectedPerson.account_status === "suspended" ? <button type="button" onClick={() => onLifecycle(selectedPerson.id, "reactivate")}>Reactivate</button> : <button type="button" onClick={() => onLifecycle(selectedPerson.id, "suspend")}>Suspend</button>}
+                <button type="button" className="danger" onClick={() => onLifecycle(selectedPerson.id, "delete")}>Delete account</button>
+              </div>}
+              {!canManageSelected && <p className="admin-empty">Only the super-admin can edit administrator accounts.</p>}
+            </article>
+          )}
+        </div>
+      )}
+
+      {section === "matches" && (
+        <div className="admin-view-stack">
+          <header className="admin-view-header"><p>Current and archived support</p><h3>Matches</h3></header>
+          <select className="admin-match-filter" aria-label="Filter match status" value={matchFilter} onChange={(e) => setMatchFilter(e.target.value)}><option value="all">All matches</option><option value="requested">Requested</option><option value="active">Active</option><option value="closed">Closed archive</option></select>
+          <div className="admin-match-list">
+            {filteredMatches.map((match) => (
+              <button type="button" key={match.id} onClick={() => setSelectedMatchId(String(match.id))}>
+                <span><strong>{match.volunteer_profile?.preferred_name || match.volunteer_profile?.full_name}</strong> with <strong>{match.caregiver_profile?.preferred_name || match.caregiver_profile?.full_name}</strong></span>
+                <span>{match.status} · {match.total_hours ?? 0} hours</span>
+              </button>
+            ))}
+          </div>
+          {selectedMatch && (
+            <article className="admin-match-detail">
+              <div className="admin-detail-heading"><div><p>Match #{selectedMatch.id}</p><h4>{selectedMatch.volunteer_profile?.full_name} + {selectedMatch.caregiver_profile?.full_name}</h4></div><button type="button" onClick={() => setSelectedMatchId("")}>Close</button></div>
+              <dl><div><dt>Status</dt><dd>{selectedMatch.status}</dd></div><div><dt>Institutions</dt><dd>{formatUniversity(selectedMatch.volunteer_profile?.university)} / {formatUniversity(selectedMatch.caregiver_profile?.university)}</dd></div><div><dt>Request date</dt><dd>{selectedMatch.requested_at ? new Date(selectedMatch.requested_at).toLocaleDateString() : "Unknown"}</dd></div><div><dt>Total meetings</dt><dd>{selectedMatch.total_meetings ?? 0}</dd></div><div><dt>Total hours</dt><dd>{selectedMatch.total_hours ?? 0}</dd></div></dl>
+              <label>Match status<select value={selectedMatch.status} onChange={(e) => onMatchStatus(selectedMatch.id, e.target.value)}><option value="requested">Requested</option><option value="active">Active</option><option value="closed">Closed</option></select></label>
+              <section><h5>Meeting logs</h5>{(selectedMatch.meeting_logs ?? []).map((log) => <article key={log.id}><strong>{new Date(log.meeting_date).toLocaleDateString()} · {log.hours} hours</strong><p>{log.topics_discussed}</p></article>)}{(selectedMatch.meeting_logs ?? []).length === 0 && <p>No meeting logs yet.</p>}</section>
+            </article>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function Home() {
   const [emailInput, setEmailInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
@@ -264,6 +581,10 @@ export default function Home() {
   const [authMode, setAuthMode] = useState("signin");
   const [authError, setAuthError] = useState("");
   const [authSuccess, setAuthSuccess] = useState("");
+  const [invitePassword, setInvitePassword] = useState("");
+  const [invitePasswordConfirm, setInvitePasswordConfirm] = useState("");
+  const [invitePasswordError, setInvitePasswordError] = useState("");
+  const [isInvitePasswordSaving, setIsInvitePasswordSaving] = useState(false);
   const [signupRole, setSignupRole] = useState("mentee");
   const [isSignupRoleLocked, setIsSignupRoleLocked] = useState(false);
   const [signupUsername, setSignupUsername] = useState("");
@@ -346,6 +667,7 @@ export default function Home() {
   const [adminSuccess, setAdminSuccess] = useState("");
   const [adminActionUserId, setAdminActionUserId] = useState("");
   const [adminViewMode, setAdminViewMode] = useState("admin");
+  const [adminSection, setAdminSection] = useState("dashboard");
   const [adminSelectedReviewedUser, setAdminSelectedReviewedUser] =
     useState(null);
   const [adminSelectedMentor, setAdminSelectedMentor] = useState(null);
@@ -439,7 +761,12 @@ export default function Home() {
   const isAdmin = userRole === "admin";
   const isMentee = userRole === "mentee";
   const isMentor = userRole === "mentor";
-  const isApproved = approvalStatus === "approved";
+  const accountStatus = profileData?.profile?.account_status ?? "active";
+  const onboardingStatus = profileData?.profile?.onboarding_status ?? "ready";
+  const isApproved =
+    approvalStatus === "approved" &&
+    accountStatus === "active" &&
+    onboardingStatus === "ready";
   const isApprovedMentee = isMentee && isApproved;
   const isApprovedMentor = isMentor && isApproved;
   const isSuperAdmin = Boolean(profileData?.profile?.is_super_admin);
@@ -448,8 +775,9 @@ export default function Home() {
       (profileData?.profile?.university &&
         profileData.profile.university !== "University not selected"),
   );
-  const isAwaitingApproval =
-    (isMentee || isMentor) && approvalStatus !== "approved";
+  const isAwaitingApproval = (isMentee || isMentor) && !isApproved;
+  const needsInvitePassword =
+    isUnlocked && !isProfileLoading && accountStatus === "invited";
   const showAdminDashboard = isAdmin && adminViewMode === "admin";
   const showMenteeExperience =
     isApprovedMentee || (isAdmin && adminViewMode === "mentee");
@@ -770,9 +1098,12 @@ export default function Home() {
     if (!payload.username) {
       delete payload.username;
     }
-    if (!payload.university && role !== "admin") {
-      setProfileError("Select your Ontario university.");
+    if (!payload.university && role === "mentor") {
+      setProfileError("Select your Ontario post-secondary institution.");
       return;
+    }
+    if (!payload.university && role === "mentee") {
+      payload.university = "University not selected";
     }
     if (role === "admin") {
       delete payload.university;
@@ -856,7 +1187,6 @@ export default function Home() {
         sessionsResponse,
         matchesResponse,
         usersResponse,
-        preapprovedEmailsResponse,
       ] =
         await Promise.all([
           apiFetch(`${BACKEND_BASE_URL}/api/admin/pending-users`, {
@@ -910,11 +1240,6 @@ export default function Home() {
               Authorization: `Bearer ${token}`,
             },
           }),
-          apiFetch(`${BACKEND_BASE_URL}/api/admin/preapproved-emails`, {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }),
         ]);
 
       if (
@@ -928,7 +1253,6 @@ export default function Home() {
           sessionsResponse,
           matchesResponse,
           usersResponse,
-          preapprovedEmailsResponse,
         ].some((response) => !response.ok)
       ) {
         throw new Error();
@@ -944,7 +1268,6 @@ export default function Home() {
       const sessionsData = await sessionsResponse.json();
       const matchesData = await matchesResponse.json();
       const usersData = await usersResponse.json();
-      const preapprovedEmailsData = await preapprovedEmailsResponse.json();
 
       setAdminPendingUsers(pendingData.pending_users ?? []);
       setAdminReviewedUsers(reviewedData.reviewed_users ?? []);
@@ -958,9 +1281,6 @@ export default function Home() {
       setAdminSessionsTotal(sessionsData.total_hours ?? 0);
       setAdminMatches(matchesData.matches ?? []);
       setAdminUsers(usersData.users ?? []);
-      setAdminPreapprovedEmails(
-        preapprovedEmailsData.preapproved_emails ?? [],
-      );
       setAdminSelectedReviewedUser((current) => {
         if (!current) return null;
         return (
@@ -1384,17 +1704,100 @@ export default function Home() {
       );
 
       if (!response.ok) {
-        throw new Error();
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.detail || ERROR_MESSAGES.action);
       }
-
-      setAdminSuccess(
-        action === "approve"
-          ? "Application approved. Create or invite the member account when ready."
-          : "Application rejected.",
-      );
+      const data = await response.json();
+      setAdminSuccess(data.message || (action === "approve" ? "Application accepted." : "Application denied."));
       await loadAdminDashboardData();
-    } catch (_error) {
-      setAdminError(ERROR_MESSAGES.action);
+    } catch (error) {
+      setAdminError(error.message || ERROR_MESSAGES.action);
+    } finally {
+      setAdminActionUserId("");
+    }
+  }
+
+  async function handleAccountLifecycle(userId, action) {
+    const token = window.localStorage.getItem("ocgoAccessToken");
+    if (!token) return;
+    setAdminActionUserId(userId);
+    setAdminError("");
+    setAdminSuccess("");
+    try {
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/admin/users/${userId}/lifecycle`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ action }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.detail || ERROR_MESSAGES.action);
+      setAdminSuccess(data.message || "Account updated.");
+      await loadAdminDashboardData();
+    } catch (error) {
+      setAdminError(error.message || ERROR_MESSAGES.action);
+    } finally {
+      setAdminActionUserId("");
+    }
+  }
+
+  async function handleAdminMatchStatus(matchId, nextStatus) {
+    const token = window.localStorage.getItem("ocgoAccessToken");
+    if (!token) return;
+    setAdminActionUserId(String(matchId));
+    setAdminError("");
+    setAdminSuccess("");
+    try {
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/admin/matches/${matchId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.detail || ERROR_MESSAGES.action);
+      setAdminSuccess("Match status updated.");
+      await loadAdminDashboardData();
+    } catch (error) {
+      setAdminError(error.message || ERROR_MESSAGES.action);
+    } finally {
+      setAdminActionUserId("");
+    }
+  }
+
+  async function handleSaveAdminPerson(userId, draft) {
+    const token = window.localStorage.getItem("ocgoAccessToken");
+    if (!token) return;
+    setAdminActionUserId(userId);
+    setAdminError("");
+    setAdminSuccess("");
+    const person = adminUsers.find((user) => user.id === userId);
+    const payload = {
+      ...draft,
+      full_name: draft.preferred_name,
+      university: draft.university || "University not selected",
+      assigned_coordinator: draft.assigned_coordinator || null,
+    };
+    if (person?.role !== "mentor") delete payload.is_visible;
+    try {
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/admin/users/${userId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.detail || ERROR_MESSAGES.save);
+      setAdminSuccess("Profile updated.");
+      await loadAdminDashboardData();
+    } catch (error) {
+      setAdminError(error.message || ERROR_MESSAGES.save);
     } finally {
       setAdminActionUserId("");
     }
@@ -1634,8 +2037,6 @@ export default function Home() {
         programApplication.communicationPreference;
       payload.accessibility_needs =
         programApplication.accessibilityNeeds.trim() || null;
-      payload.additional_information =
-        programApplication.additionalInformation.trim() || null;
     } else {
       payload.volunteer_motivation =
         programApplication.volunteerMotivation.trim();
@@ -1840,6 +2241,43 @@ export default function Home() {
       setRequestError(ERROR_MESSAGES.action);
     } finally {
       setIsSendingMatch(false);
+    }
+  }
+
+  async function handleCompleteInvitation(event) {
+    event.preventDefault();
+    if (invitePassword.length < 8) {
+      setInvitePasswordError("Use at least 8 characters for your password.");
+      return;
+    }
+    if (invitePassword !== invitePasswordConfirm) {
+      setInvitePasswordError("The passwords do not match.");
+      return;
+    }
+    const token = window.localStorage.getItem("ocgoAccessToken");
+    if (!token || !supabase) {
+      setInvitePasswordError("Your invitation session has expired. Open the invitation email again.");
+      return;
+    }
+
+    setIsInvitePasswordSaving(true);
+    setInvitePasswordError("");
+    try {
+      const { error } = await supabase.auth.updateUser({ password: invitePassword });
+      if (error) throw error;
+      const response = await apiFetch(`${BACKEND_BASE_URL}/api/auth/complete-invitation`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error();
+      setProfileData(await response.json());
+      setInvitePassword("");
+      setInvitePasswordConfirm("");
+      setProfileSaveMessage("Password created. Continue your onboarding below.");
+    } catch {
+      setInvitePasswordError("We couldn't finish setting up your account. Open the invitation email and try again.");
+    } finally {
+      setIsInvitePasswordSaving(false);
     }
   }
 
@@ -2384,9 +2822,7 @@ export default function Home() {
 
                 <form className="application-form" onSubmit={handleApplicationSubmit}>
                   <div className="application-field">
-                    <label htmlFor="caregiver-full-legal-name">
-                      Full legal name * <span>(Used internally only)</span>
-                    </label>
+                    <label htmlFor="caregiver-full-legal-name">Full name *</label>
                     <input
                       id="caregiver-full-legal-name"
                       type="text"
@@ -2401,9 +2837,7 @@ export default function Home() {
                   </div>
 
                   <div className="application-field">
-                    <label htmlFor="caregiver-preferred-name">
-                      Preferred name * <span>(Shown to your volunteer match)</span>
-                    </label>
+                    <label htmlFor="caregiver-preferred-name">Preferred name *</label>
                     <input
                       id="caregiver-preferred-name"
                       type="text"
@@ -2461,10 +2895,7 @@ export default function Home() {
                   </div>
 
                   <div className="application-field">
-                    <label htmlFor="caregiver-university">
-                      What university or post-secondary institution are you a part of, if any?
-                      <span>(Optional — you don&apos;t need to be enrolled anywhere)</span>
-                    </label>
+                    <label htmlFor="caregiver-university">Ontario post-secondary institution (optional)</label>
                     <select
                       id="caregiver-university"
                       value={programApplication.university}
@@ -2472,7 +2903,7 @@ export default function Home() {
                         updateProgramApplication("university", event.target.value)
                       }
                     >
-                      <option value="">Select your school (optional)</option>
+                      <option value="">Not currently affiliated with a school</option>
                       {ONTARIO_POSTSECONDARY_INSTITUTIONS.map((institution) => (
                         <option key={institution} value={institution}>
                           {institution}
@@ -2554,31 +2985,15 @@ export default function Home() {
                     />
                   </div>
 
-                  <div className="application-field">
-                    <label htmlFor="caregiver-additional-information">
-                      Anything else you&apos;d like our team to know?
-                      <span>(This stays internal to QYCC — it is not shared with a volunteer)</span>
-                    </label>
-                    <textarea
-                      id="caregiver-additional-information"
-                      value={programApplication.additionalInformation}
-                      onChange={(event) =>
-                        updateProgramApplication("additionalInformation", event.target.value)
-                      }
-                      rows={4}
-                      maxLength={2000}
-                    />
-                  </div>
-
                   <p className="application-privacy-note">
-                    If you request a mentor, selected information from this form
-                    will be shared with that mentor so they can decide whether
+                    If you request a peer support volunteer, selected information from this form
+                    will be shared with that volunteer so they can decide whether
                     they are comfortable accepting the match. This may include
                     your preferred name, broad caregiving situation, support
                     goals, availability, preferred communication method,
                     accessibility needs, and relevant matching preferences.
                     Direct contact information, if required, is shared only
-                    after the mentor accepts. QYCC coordinators may access
+                    after the peer support volunteer accepts. QYCC coordinators may access
                     information and website messages for program administration,
                     safety, supervision, and quality assurance. The website is
                     not an emergency service.
@@ -2681,9 +3096,7 @@ export default function Home() {
 
                 <form className="application-form" onSubmit={handleApplicationSubmit}>
                   <div className="application-field">
-                    <label htmlFor="volunteer-full-legal-name">
-                      Full legal name * <span>(Used internally only)</span>
-                    </label>
+                    <label htmlFor="volunteer-full-legal-name">Full name *</label>
                     <input
                       id="volunteer-full-legal-name"
                       type="text"
@@ -2698,9 +3111,7 @@ export default function Home() {
                   </div>
 
                   <div className="application-field">
-                    <label htmlFor="volunteer-preferred-name">
-                      Preferred name * <span>(Shown on your public profile)</span>
-                    </label>
+                    <label htmlFor="volunteer-preferred-name">Preferred name *</label>
                     <input
                       id="volunteer-preferred-name"
                       type="text"
@@ -2847,11 +3258,11 @@ export default function Home() {
 
                   <p className="application-privacy-note">
                     Information you provide may be used to assess eligibility,
-                    create a mentor profile, support matching, administer the
+                    create a peer support volunteer profile, support matching, administer the
                     program, and address safety or conduct concerns. Your public
                     profile will contain only the fields shown to you for
                     approval. Your private contact and screening information
-                    will not be shown to mentees unless you expressly choose an
+                    will not be shown to caregivers unless you expressly choose an
                     approved contact method that requires disclosure.
                   </p>
 
@@ -3064,7 +3475,7 @@ export default function Home() {
                     className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                   >
                     <option value="">Select your university</option>
-                    {ONTARIO_UNIVERSITIES.map((university) => (
+                    {ONTARIO_POSTSECONDARY_INSTITUTIONS.map((university) => (
                       <option key={university} value={university}>
                         {university}
                       </option>
@@ -3172,26 +3583,40 @@ export default function Home() {
                     ? "Create account"
                     : "Sign in"}
               </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setAuthMode((currentMode) => {
-                    setAuthError("");
-                    setAuthSuccess("");
-                    return currentMode === "signup" ? "signin" : "signup";
-                  })
-                }
-                className="w-fit text-sm font-semibold text-[#2a3723] underline"
-              >
-                {authMode === "signup"
-                  ? "Already have an account? Sign in"
-                  : "Need an account? Sign up"}
+              {authMode === "signin" && (
+                <button
+                  type="button"
+                  onClick={() => showHomePage()}
+                  className="w-fit text-sm font-semibold text-[#2a3723] underline"
+                >
+                  Need an account? Submit an application first
+                </button>
+              )}
+            </form>
+          </section>
+        )}
+
+        {needsInvitePassword && (
+          <section className="mx-auto w-full max-w-2xl rounded-lg border border-[#d3d1c8] bg-white p-6 shadow-sm sm:p-8">
+            <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#2a3723]">Secure account invitation</p>
+            <h1 className="mt-2 text-4xl font-medium text-[#0c0a08]">Create your password</h1>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-[#59604f]">
+              Choose a private password for future sign-ins. QYCC administrators cannot view it.
+            </p>
+            <form className="mt-6 grid gap-3" onSubmit={handleCompleteInvitation}>
+              <label htmlFor="invite-password" className="text-sm font-bold text-[#2a3723]">New password</label>
+              <input id="invite-password" type="password" value={invitePassword} onChange={(event) => setInvitePassword(event.target.value)} minLength={8} autoComplete="new-password" className="rounded-md border border-[#b9bba8] px-4 py-3" required />
+              <label htmlFor="invite-password-confirm" className="text-sm font-bold text-[#2a3723]">Confirm password</label>
+              <input id="invite-password-confirm" type="password" value={invitePasswordConfirm} onChange={(event) => setInvitePasswordConfirm(event.target.value)} minLength={8} autoComplete="new-password" className="rounded-md border border-[#b9bba8] px-4 py-3" required />
+              {invitePasswordError && <p className="text-sm font-semibold text-red-700">{invitePasswordError}</p>}
+              <button type="submit" disabled={isInvitePasswordSaving} className="mt-2 w-fit rounded-md bg-[#2a3723] px-5 py-3 text-sm font-bold text-white disabled:bg-slate-300">
+                {isInvitePasswordSaving ? "Saving..." : "Create password"}
               </button>
             </form>
           </section>
         )}
 
-        {isUnlocked && !isMatchSent && (
+        {isUnlocked && !isMatchSent && !needsInvitePassword && (
           <>
             {!isProfileLoading && profileError && (
               <section className="rounded-lg border border-red-200 bg-red-50 p-6 shadow-sm">
@@ -3223,16 +3648,29 @@ export default function Home() {
             {!isProfileLoading && !profileError && isAwaitingApproval && (
               <section className="rounded-lg border border-[#b9bba8] bg-white p-6 shadow-sm">
                 <p className="text-sm font-bold uppercase tracking-[0.08em] text-[#2a3723]">
-                  Account pending
+                  {accountStatus === "suspended" ? "Account suspended" : onboardingStatus === "profile_pending" ? "Profile required" : "Onboarding in progress"}
                 </p>
                 <h3 className="mt-2 text-2xl font-bold text-[#0c0a08]">
-                  Your {userRole === "mentor" ? "volunteer" : "caregiver"} profile is waiting for admin approval.
+                  {accountStatus === "suspended"
+                    ? "Your account is currently unavailable."
+                    : onboardingStatus === "profile_pending"
+                      ? "Complete your bio to activate your caregiver account."
+                      : userRole === "mentor"
+                        ? "Your peer support volunteer onboarding is in progress."
+                        : "Your caregiver account is being reviewed."}
                 </h3>
                 <p className="mt-2 max-w-2xl text-sm text-[#59604f]">
-                  You can update your profile and university from Settings,
-                  but matching, requests, and volunteer-hour tools stay
-                  locked until an admin approves this account.
+                  {accountStatus === "suspended"
+                    ? "Contact a QYCC coordinator if you believe this is a mistake."
+                    : onboardingStatus === "profile_pending"
+                      ? "Add a short bio in Settings. Your matching tools will open as soon as it is saved."
+                      : "Matching and volunteer-hour tools will open when a coordinator marks onboarding complete."}
                 </p>
+                {accountStatus !== "suspended" && onboardingStatus === "profile_pending" && (
+                  <button type="button" onClick={() => setIsSettingsOpen(true)} className="mt-4 rounded-md bg-[#2a3723] px-5 py-2 text-sm font-bold text-white">
+                    Complete profile
+                  </button>
+                )}
               </section>
             )}
 
@@ -3307,7 +3745,10 @@ export default function Home() {
                       <header className="request-record-header flex flex-wrap items-start justify-between gap-4 border-b border-[#d3d1c8] px-6 py-5">
                         <div>
                           <p className="text-xl font-extrabold text-[#0c0a08]">
-                            {request.mentee_profile?.full_name || "Unnamed caregiver"}
+                            {request.caregiver_application?.preferred_name ||
+                              request.caregiver_profile?.preferred_name ||
+                              request.caregiver_profile?.full_name ||
+                              "Unnamed caregiver"}
                           </p>
                           <p className="mt-1 text-sm text-[#59604f]">
                             Submitted {new Date(request.created_at).toLocaleString()}
@@ -3328,12 +3769,17 @@ export default function Home() {
                           <p className="request-label mt-7">About the caregiver</p>
                           <p className="mt-2 text-sm font-semibold text-[#2a3723]">
                             {formatUniversity(
-                              request.mentee_profile?.university,
+                              request.caregiver_profile?.university,
                             )}
                           </p>
                           <p className="mt-2 max-w-3xl text-base leading-7 text-[#41473b]">
-                            {request.mentee_profile?.bio || "No bio provided."}
+                            {request.caregiver_profile?.bio || "No bio provided."}
                           </p>
+                          <dl className="request-disclosure-list">
+                            <div><dt>Caregiving situation</dt><dd>{request.caregiver_application?.caregiving_situation || "Not provided"}</dd></div>
+                            <div><dt>Support requested</dt><dd>{request.caregiver_application?.support_requested || request.care_type || "Not provided"}</dd></div>
+                            <div><dt>Communication preference</dt><dd>{request.caregiver_application?.communication_preference || "Not provided"}</dd></div>
+                          </dl>
                         </div>
 
                         <aside className="bg-[#f5f3ed] px-6 py-6">
@@ -3348,7 +3794,7 @@ export default function Home() {
                       </div>
 
                       <footer className="flex flex-wrap items-center gap-3 border-t border-[#d3d1c8] px-6 py-5">
-                        {request.status === "pending" ? (
+                        {request.status === "requested" ? (
                           <>
                                 <button
                                   type="button"
@@ -3374,9 +3820,12 @@ export default function Home() {
                                 </button>
                           </>
                         ) : request.status === "active" ? (
-                          <p className="text-sm font-semibold text-green-700">
-                            This caregiver is an active match.
-                          </p>
+                          <div className="w-full">
+                            <p className="text-sm font-semibold text-green-700">
+                              This caregiver is an active match.
+                            </p>
+                            <MatchMessagePanel matchId={request.id} currentUserId={profileData?.profile?.id} />
+                          </div>
                         ) : (
                           <p className="text-sm font-semibold text-[#59604f]">
                             This request is closed.
@@ -3418,7 +3867,8 @@ export default function Home() {
                           className="border-b border-[#d3d1c8] py-4 text-sm text-[#41473b] last:border-b-0"
                         >
                           <p className="font-bold text-[#0c0a08]">
-                            {request.mentee_profile?.full_name ||
+                            {request.caregiver_profile?.preferred_name ||
+                              request.caregiver_profile?.full_name ||
                               "Unnamed caregiver"}
                           </p>
                           <p>
@@ -3428,13 +3878,14 @@ export default function Home() {
                           <p>
                             <span className="font-bold">University:</span>{" "}
                             {formatUniversity(
-                              request.mentee_profile?.university,
+                              request.caregiver_profile?.university,
                             )}
                           </p>
                           <p>
                             <span className="font-bold">Match ID:</span>{" "}
                             {request.id}
                           </p>
+                          <MatchMessagePanel matchId={request.id} currentUserId={profileData?.profile?.id} />
                         </article>
                       ))}
                     </div>
@@ -3488,7 +3939,8 @@ export default function Home() {
                         <option value="">Select active match</option>
                         {activeMenteeConnections.map((request) => (
                           <option key={`hours-${request.id}`} value={request.id}>
-                            {(request.mentee_profile?.full_name ||
+                            {(request.caregiver_profile?.preferred_name ||
+                              request.caregiver_profile?.full_name ||
                               "Unnamed caregiver") + ` (Match ${request.id})`}
                           </option>
                         ))}
@@ -3683,7 +4135,7 @@ export default function Home() {
                 </section>
               )}
 
-            {isAdmin && (
+            {isAdmin && false && (
               <nav className="workspace-tabs" aria-label="Admin workspace">
                 <div className="inline-flex p-1">
                   <button
@@ -3712,7 +4164,38 @@ export default function Home() {
               </nav>
             )}
 
-            {showAdminDashboard && (
+            {showAdminDashboard && !hasAdminUniversityScope && (
+              <section className="rounded-lg border border-[#b9bba8] bg-white p-6 shadow-sm">
+                <p className="text-sm font-bold uppercase tracking-[0.08em] text-[#2a3723]">Admin setup</p>
+                <h3 className="mt-2 text-2xl font-bold text-[#0c0a08]">University assignment required</h3>
+                <p className="mt-2 max-w-2xl text-sm text-[#59604f]">
+                  Your coordinator account cannot access applications or member records until the super-admin assigns an Ontario post-secondary institution.
+                </p>
+              </section>
+            )}
+
+            {showAdminDashboard && hasAdminUniversityScope && (
+              <AdminWorkspace
+                section={adminSection}
+                onSectionChange={setAdminSection}
+                metrics={adminMetrics}
+                applications={adminProgramApplications}
+                reviewedApplications={adminReviewedProgramApplications}
+                users={adminUsers}
+                matches={adminMatches}
+                loading={isAdminLoading}
+                error={adminError}
+                success={adminSuccess}
+                actionId={adminActionUserId}
+                onReviewApplication={handleProgramApplicationAction}
+                onSavePerson={handleSaveAdminPerson}
+                onLifecycle={handleAccountLifecycle}
+                onMatchStatus={handleAdminMatchStatus}
+                isSuperAdmin={isSuperAdmin}
+              />
+            )}
+
+            {showAdminDashboard && false && (
               <section className="admin-dashboard">
                 <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#d3d1c8] pb-7">
                   <div>
@@ -3856,7 +4339,7 @@ export default function Home() {
                         className="rounded-md border border-[#b9bba8] bg-white px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] disabled:bg-[#f0f1eb] focus:border-[#2a3723] focus:ring-2"
                       >
                         <option value="">Select university</option>
-                        {ONTARIO_UNIVERSITIES.map((university) => (
+                        {ONTARIO_POSTSECONDARY_INSTITUTIONS.map((university) => (
                           <option key={`invite-${university}`} value={university}>
                             {university}
                           </option>
@@ -4048,7 +4531,7 @@ export default function Home() {
                         className="rounded-md border border-[#b9bba8] bg-white px-4 py-3 font-normal text-[#0c0a08] outline-none ring-[#9ca48f] disabled:bg-[#f0f1eb] focus:border-[#2a3723] focus:ring-2"
                       >
                         <option value="">Select university</option>
-                        {ONTARIO_UNIVERSITIES.map((university) => (
+                        {ONTARIO_POSTSECONDARY_INSTITUTIONS.map((university) => (
                           <option key={`managed-${university}`} value={university}>
                             {university}
                           </option>
@@ -5150,10 +5633,13 @@ export default function Home() {
                               {request.mentor_profile.bio}
                             </p>
                           )}
-                          {request.status === "declined" && (
+                          {request.status === "active" && (
+                            <MatchMessagePanel matchId={request.id} currentUserId={profileData?.profile?.id} />
+                          )}
+                          {request.status === "closed" && (
                             <div className="mt-3 rounded-md border border-[#f1cccc] bg-[#fff5f5] p-3">
                               <p className="font-bold text-[#8f2525]">
-                                This volunteer declined the request.
+                                This request is closed.
                               </p>
                               <p className="mt-1 text-sm text-[#6f3434]">
                                 Choose another available volunteer above to send a new request.
@@ -5223,6 +5709,17 @@ export default function Home() {
                           {requestError}
                         </p>
                       )}
+
+                      <section className="request-sharing-preview">
+                        <h4>Information shared with this peer support volunteer</h4>
+                        <dl>
+                          <div><dt>Preferred name</dt><dd>{profileData?.application?.preferred_name || profileData?.profile?.preferred_name || profileData?.profile?.full_name || "Not provided"}</dd></div>
+                          <div><dt>Caregiving situation</dt><dd>{profileData?.application?.caregiving_situation || "Not provided"}</dd></div>
+                          <div><dt>Support requested</dt><dd>{profileData?.application?.support_requested || careType || "Not provided"}</dd></div>
+                          <div><dt>Communication preference</dt><dd>{profileData?.application?.communication_preference || "Not provided"}</dd></div>
+                        </dl>
+                        <p>Your contact information stays private until the volunteer accepts.</p>
+                      </section>
 
                       <button
                         type="button"
@@ -5320,7 +5817,7 @@ export default function Home() {
 
               {profileData?.profile?.role && (
                 <p className="mt-4 inline-flex rounded-md bg-[#dfe2d5] px-4 py-2 text-xs font-bold text-[#2a3723]">
-                  {profileData.profile.role} -{" "}
+                  {roleLabel(profileData.profile.role)} -{" "}
                   {profileData.profile.approval_status}
                 </p>
               )}
@@ -5393,7 +5890,7 @@ export default function Home() {
                         htmlFor="profile-university"
                         className="text-sm font-bold text-[#2a3723]"
                       >
-                        Ontario university
+                        Ontario post-secondary institution
                       </label>
                       <select
                         id="profile-university"
@@ -5404,11 +5901,11 @@ export default function Home() {
                             university: event.target.value,
                           }))
                         }
-                        required
+                        required={userRole === "mentor"}
                         className="rounded-md border border-[#b9bba8] px-4 py-3 text-sm outline-none ring-[#9ca48f] transition focus:border-[#2a3723] focus:ring-2"
                       >
-                        <option value="">Select your university</option>
-                        {ONTARIO_UNIVERSITIES.map((university) => (
+                        <option value="">Not currently affiliated with a school</option>
+                        {ONTARIO_POSTSECONDARY_INSTITUTIONS.map((university) => (
                           <option key={university} value={university}>
                             {university}
                           </option>

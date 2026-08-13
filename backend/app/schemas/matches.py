@@ -10,3 +10,7 @@ class MatchRequestPayload(BaseModel):
 
 class MentorDecisionPayload(BaseModel):
     decision: Literal["accept", "reject"]
+
+
+class MatchMessageCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)

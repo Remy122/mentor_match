@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 AccountRole = Literal["admin", "mentor", "mentee"]
 MemberRole = Literal["mentor", "mentee"]
 ApprovalStatus = Literal["pending", "approved", "rejected"]
+AccountStatus = Literal["invited", "active", "suspended", "deleted"]
+OnboardingStatus = Literal["profile_pending", "training", "ready"]
 
 
 class PreapprovedEmailCreate(BaseModel):
@@ -43,7 +45,10 @@ class AdminProfileUpdate(BaseModel):
         pattern=r"^[A-Za-z0-9_]+$",
     )
     full_name: str | None = Field(default=None, min_length=1, max_length=120)
-    university: str | None = Field(default=None, min_length=1, max_length=120)
+    legal_name: str | None = Field(default=None, min_length=1, max_length=120)
+    preferred_name: str | None = Field(default=None, min_length=1, max_length=120)
+    phone_number: str | None = Field(default=None, min_length=7, max_length=40)
+    university: str | None = Field(default=None, min_length=1, max_length=160)
     bio: str | None = Field(default=None, max_length=2000)
     approval_status: ApprovalStatus | None = None
     is_visible: bool | None = None
@@ -51,3 +56,15 @@ class AdminProfileUpdate(BaseModel):
     availability: str | None = Field(default=None, max_length=500)
     goals: str | None = Field(default=None, max_length=2000)
     interests: list[str] | None = None
+    account_status: AccountStatus | None = None
+    onboarding_status: OnboardingStatus | None = None
+    assigned_coordinator: str | None = None
+
+
+class AccountLifecycleUpdate(BaseModel):
+    action: Literal["suspend", "reactivate", "delete"]
+
+
+class MatchStatusUpdate(BaseModel):
+    status: Literal["requested", "active", "closed"]
+    closed_reason: str | None = Field(default=None, max_length=500)

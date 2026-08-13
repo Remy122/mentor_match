@@ -2,9 +2,10 @@ from typing import Any, Iterable
 
 
 PROFILE_COLUMNS = (
-    "id,role,username,full_name,bio,profile_picture_url,"
+    "id,role,username,full_name,legal_name,preferred_name,phone_number,bio,profile_picture_url,"
     "university,approval_status,is_visible,same_university_only,"
-    "is_super_admin,created_at"
+    "is_super_admin,program_application_id,account_status,onboarding_status,"
+    "assigned_coordinator,stage_started_at,suspended_at,created_at"
 )
 
 

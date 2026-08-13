@@ -46,7 +46,6 @@ def create_application(
             "support_requested",
             "communication_preference",
             "accessibility_needs",
-            "additional_information",
         ):
             application[field] = None
 
@@ -58,4 +57,3 @@ def create_application(
         )
 
     return ProgramApplicationCreateResponse(message="Application submitted.")
-

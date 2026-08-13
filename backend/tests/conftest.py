@@ -35,6 +35,15 @@ class FakeAuthAdmin:
         user = type("User", (), {"id": user_id, "email": payload.get("email")})()
         return type("Result", (), {"user": user})()
 
+    def invite_user_by_email(self, email: str, options: dict[str, Any] | None = None) -> Any:
+        user_id = f"auth-{self._client.next_id('auth_users')}"
+        self._users[user_id] = {
+            "email": email,
+            "user_metadata": (options or {}).get("data") or {},
+        }
+        user = type("User", (), {"id": user_id, "email": email})()
+        return type("Result", (), {"user": user})()
+
     def delete_user(self, user_id: str) -> None:
         self._users.pop(user_id, None)
 
@@ -172,6 +181,8 @@ class FakeSupabase:
             "matches": [],
             "volunteer_hours": [],
             "preapproved_emails": [],
+            "program_applications": [],
+            "match_messages": [],
         }
         self.users: dict[str, dict[str, Any]] = {}
         self._counters: dict[str, int] = {

@@ -26,7 +26,6 @@ class ProgramApplicationCreate(BaseModel):
         "No preference",
     ] | None = None
     accessibility_needs: str | None = Field(default=None, max_length=2000)
-    additional_information: str | None = Field(default=None, max_length=2000)
     volunteer_motivation: str | None = Field(default=None, max_length=2000)
     caregiving_experience: str | None = Field(default=None, max_length=2000)
     other_relevant_experience: str | None = Field(default=None, max_length=2000)
@@ -42,7 +41,6 @@ class ProgramApplicationCreate(BaseModel):
         "caregiving_situation",
         "support_requested",
         "accessibility_needs",
-        "additional_information",
         "volunteer_motivation",
         "caregiving_experience",
         "other_relevant_experience",

@@ -8,7 +8,10 @@ from app.core.config import settings
 from app.core.auth import AuthUser, require_auth, _decode_bearer_token
 from app.core.profiles import get_profile, get_role_profile
 from app.core.supabase import get_supabase_client
-from app.core.universities import normalize_ontario_university
+from app.core.universities import (
+    UNIVERSITY_NOT_SELECTED,
+    normalize_ontario_postsecondary_institution,
+)
 from app.schemas.auth import MeResponse, ProfileSyncRequest, ProfileUpdateRequest
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -25,6 +28,24 @@ def _get_profile_or_404(user_id: str) -> dict[str, Any]:
 def _get_role_profile(user_id: str, role: str) -> dict[str, Any] | None:
     supabase = get_supabase_client()
     return get_role_profile(supabase, user_id, role)
+
+
+def _get_program_application(profile: dict[str, Any]) -> dict[str, Any] | None:
+    application_id = profile.get("program_application_id")
+    if not application_id:
+        return None
+    result = (
+        get_supabase_client()
+        .table("program_applications")
+        .select(
+            "id,application_type,preferred_name,caregiving_situation,"
+            "support_requested,communication_preference"
+        )
+        .eq("id", application_id)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
 
 
 def _ensure_username_available(
@@ -44,12 +65,14 @@ def _ensure_username_available(
     return normalized
 
 
-def _validate_university(university: str) -> str:
-    normalized = normalize_ontario_university(university)
+def _validate_university(university: str, *, allow_unaffiliated: bool = False) -> str:
+    if allow_unaffiliated and university.strip() in {"", UNIVERSITY_NOT_SELECTED}:
+        return UNIVERSITY_NOT_SELECTED
+    normalized = normalize_ontario_postsecondary_institution(university)
     if not normalized:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Select a valid Ontario university.",
+            detail="Select a valid Ontario post-secondary institution.",
         )
     return normalized
 
@@ -116,7 +139,10 @@ def sync_profile(payload: ProfileSyncRequest, current_user: AuthUser = Depends(r
         metadata_university = raw_user_metadata.get("university")
     requested_university = payload.university or metadata_university
     if requested_university and isinstance(requested_university, str):
-        profile_fields["university"] = _validate_university(requested_university)
+        profile_fields["university"] = _validate_university(
+            requested_university,
+            allow_unaffiliated=desired_role == "mentee",
+        )
 
     if not existing_profile:
         profile_fields["approval_status"] = "pending"
@@ -145,6 +171,7 @@ def sync_profile(payload: ProfileSyncRequest, current_user: AuthUser = Depends(r
         profile=profile,
         mentor_profile=_get_role_profile(current_user.id, "mentor") if profile["role"] == "mentor" else None,
         mentee_profile=_get_role_profile(current_user.id, "mentee") if profile["role"] == "mentee" else None,
+        application=_get_program_application(profile),
     )
 
 
@@ -155,6 +182,30 @@ def get_me(current_user: AuthUser = Depends(require_auth)) -> MeResponse:
         profile=profile,
         mentor_profile=_get_role_profile(current_user.id, "mentor") if profile["role"] == "mentor" else None,
         mentee_profile=_get_role_profile(current_user.id, "mentee") if profile["role"] == "mentee" else None,
+        application=_get_program_application(profile),
+    )
+
+
+@router.post("/complete-invitation", response_model=MeResponse)
+def complete_invitation(current_user: AuthUser = Depends(require_auth)) -> MeResponse:
+    supabase = get_supabase_client()
+    profile = _get_profile_or_404(current_user.id)
+    if profile.get("account_status") == "invited":
+        now = datetime.now(timezone.utc).isoformat()
+        supabase.table("profiles").update(
+            {"account_status": "active", "stage_started_at": now}
+        ).eq("id", current_user.id).execute()
+        application_id = profile.get("program_application_id")
+        if application_id:
+            supabase.table("program_applications").update(
+                {"onboarding_status": profile.get("onboarding_status") or "profile_pending"}
+            ).eq("id", application_id).execute()
+        profile = _get_profile_or_404(current_user.id)
+    return MeResponse(
+        profile=profile,
+        mentor_profile=_get_role_profile(current_user.id, "mentor") if profile["role"] == "mentor" else None,
+        mentee_profile=_get_role_profile(current_user.id, "mentee") if profile["role"] == "mentee" else None,
+        application=_get_program_application(profile),
     )
 
 
@@ -183,7 +234,16 @@ def update_me(payload: ProfileUpdateRequest, current_user: AuthUser = Depends(re
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Admin university assignments are managed by the super-admin.",
             )
-        profile_updates["university"] = _validate_university(payload.university)
+        profile_updates["university"] = _validate_university(
+            payload.university,
+            allow_unaffiliated=target_role == "mentee",
+        )
+
+    if payload.bio is not None and payload.bio.strip():
+        profile_updates["account_status"] = "active"
+        if target_role == "mentee" and profile.get("onboarding_status") == "profile_pending":
+            profile_updates["onboarding_status"] = "ready"
+            profile_updates["approval_status"] = "approved"
 
     if payload.is_visible is not None:
         if target_role != "mentor":
@@ -227,6 +287,7 @@ def update_me(payload: ProfileUpdateRequest, current_user: AuthUser = Depends(re
         profile=refreshed,
         mentor_profile=_get_role_profile(current_user.id, "mentor") if refreshed["role"] == "mentor" else None,
         mentee_profile=_get_role_profile(current_user.id, "mentee") if refreshed["role"] == "mentee" else None,
+        application=_get_program_application(refreshed),
     )
 
 
