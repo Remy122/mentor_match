@@ -13,7 +13,7 @@ const fraunces = Fraunces({
 });
 
 export const metadata = {
-  title: "QYCC — Peer Support for Young Caregivers",
+  title: "Peer Support for Young Caregivers",
   description:
     "Young caregivers connect with trained peer support volunteers who understand caregiving, campus life, and the realities of balancing both.",
   icons: {

@@ -32,6 +32,7 @@ function profileFor(role, approvalStatus, isSuperAdmin) {
     preferred_name: names[role].split(" ")[0],
     legal_name: names[role],
     bio: `E2E ${role} profile`,
+    profile_picture_url: "",
     university: "University of Toronto",
     approval_status: approvalStatus,
     is_visible: role === "mentor" && approvalStatus === "approved",
@@ -297,6 +298,8 @@ async function installPortalMocks(
     lastHourEntry: null,
     lastSyncPayload: null,
     applicationPayloads: [],
+    profilePictureUploads: [],
+    profilePictureRemovals: [],
     runtimeErrors: [],
     unhandledRoutes: [],
   };
@@ -360,6 +363,53 @@ async function installPortalMocks(
     await fulfillJson(route, {});
   });
 
+  await page.route("**/storage/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const method = request.method();
+
+    if (method === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: CORS_HEADERS });
+      return;
+    }
+
+    if (
+      method === "GET" &&
+      url.pathname.startsWith("/storage/v1/object/public/profile-pictures/")
+    ) {
+      await route.fulfill({
+        status: 200,
+        headers: { ...CORS_HEADERS, "content-type": "image/png" },
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      });
+      return;
+    }
+
+    if (
+      method === "POST" &&
+      url.pathname.startsWith("/storage/v1/object/profile-pictures/")
+    ) {
+      state.profilePictureUploads.push(url.pathname);
+      await fulfillJson(route, {
+        Key: url.pathname.replace("/storage/v1/object/", ""),
+      });
+      return;
+    }
+
+    if (method === "DELETE" && url.pathname === "/storage/v1/object/profile-pictures") {
+      const body = request.postDataJSON();
+      state.profilePictureRemovals.push(...(body.prefixes ?? []));
+      await fulfillJson(route, []);
+      return;
+    }
+
+    state.unhandledRoutes.push(`${method} ${url.pathname}`);
+    await fulfillJson(route, {}, 404);
+  });
+
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -389,6 +439,8 @@ async function installPortalMocks(
         username: body.username ?? state.profile.username,
         full_name: body.full_name ?? state.profile.full_name,
         bio: body.bio ?? state.profile.bio,
+        profile_picture_url:
+          body.profile_picture_url ?? state.profile.profile_picture_url,
         university: body.university ?? state.profile.university,
         is_visible: body.is_visible ?? state.profile.is_visible,
         same_university_only:
@@ -640,7 +692,23 @@ async function installPortalMocks(
       const userId = path.split("/")[4];
       const body = request.postDataJSON();
       const target = state.adminUsers.find((user) => user.id === userId);
-      if (target) target.account_status = body.action === "reactivate" ? "active" : body.action === "delete" ? "deleted" : "suspended";
+      if (body.action === "delete") {
+        state.adminUsers = state.adminUsers.filter((user) => user.id !== userId);
+        state.pendingAdminUsers = state.pendingAdminUsers.filter(
+          (user) => user.id !== userId,
+        );
+        state.reviewedAdminUsers = state.reviewedAdminUsers.filter(
+          (user) => user.id !== userId,
+        );
+        await fulfillJson(route, {
+          message: "Account permanently deleted.",
+          deleted_user_id: userId,
+        });
+        return;
+      }
+      if (target) {
+        target.account_status = body.action === "reactivate" ? "active" : "suspended";
+      }
       await fulfillJson(route, { message: `Account ${body.action}d.`, profile: target });
       return;
     }
@@ -764,7 +832,9 @@ test("unknown routes show the branded 404 page and return home", async ({ page }
   }));
   expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth + 1);
 
-  await page.getByRole("link", { name: "QYCC home", exact: true }).click();
+  await page
+    .getByRole("link", { name: "Young Caregiver Community home", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Peer support, from people who get it." }),
   ).toBeVisible();
@@ -777,6 +847,7 @@ test("public caregiver and volunteer applications match the reference flow", asy
   });
 
   await page.goto("/");
+  await expect(page).toHaveTitle("Peer Support for Young Caregivers");
   await expect(
     page.getByRole("heading", { name: "Peer support, from people who get it." }),
   ).toBeVisible();
@@ -789,7 +860,9 @@ test("public caregiver and volunteer applications match the reference flow", asy
   await page.getByRole("button", { name: "About", exact: true }).click();
   await expect(page.getByRole("heading", { name: "About", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "What we do", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "QYCC home", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Young Caregiver Community home", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Peer support, from people who get it." }),
   ).toBeVisible();
@@ -959,6 +1032,38 @@ test("caregiver browses across universities and sends one match request", async 
   await expectHealthyPage(page, state);
 });
 
+test("member uploads and removes a profile picture", async ({ page }) => {
+  const state = await installPortalMocks(page, { role: "mentee" });
+  await signIn(page, state);
+
+  await page.getByRole("button", { name: "Open profile menu" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByLabel("Upload profile picture").setInputFiles({
+    name: "profile.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("e2e-profile-picture"),
+  });
+  await expect(
+    page.getByRole("img", { name: "Casey Caregiver profile picture" }).first(),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Save profile" }).click();
+  await expect(page.getByText("Profile saved.", { exact: true })).toBeVisible();
+  expect(state.profilePictureUploads).toEqual([
+    "/storage/v1/object/profile-pictures/mentee-e2e/avatar",
+  ]);
+  expect(state.profile.profile_picture_url).toContain(
+    "/storage/v1/object/public/profile-pictures/mentee-e2e/avatar?v=",
+  );
+
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await page.getByRole("button", { name: "Save profile" }).click();
+  await expect(page.getByText("Profile saved.", { exact: true })).toBeVisible();
+  expect(state.profilePictureRemovals).toEqual(["mentee-e2e/avatar"]);
+  expect(state.profile.profile_picture_url).toBe("");
+  await expectHealthyPage(page, state);
+});
+
 test("volunteer accepts requests and logs hours with topics and flags", async ({ page }) => {
   const state = await installPortalMocks(page, { role: "mentor" });
   await signIn(page, state);
@@ -997,7 +1102,7 @@ test("normal admin is limited to one university while managing applications", as
   const state = await installPortalMocks(page, { role: "admin" });
   await signIn(page, state);
 
-  await expect(page.getByRole("heading", { name: "What needs attention" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Dashboard", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Applications", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "People", exact: true })).toBeVisible();
@@ -1011,6 +1116,7 @@ test("normal admin is limited to one university while managing applications", as
   );
   await expect(programApplication).toBeVisible();
   await expect(programApplication.getByText("Morgan", { exact: true })).toBeVisible();
+  await programApplication.getByRole("button", { name: /Morgan/ }).click();
   await expect(
     programApplication.getByText("morgan.volunteer@example.com", { exact: true }),
   ).toBeVisible();
@@ -1041,11 +1147,30 @@ test("normal admin is limited to one university while managing applications", as
       (application) => application.id === "program-volunteer-pending",
     ).status,
   ).toBe("approved");
+  await expect(page.getByRole("heading", { name: "Past applications" })).toBeVisible();
+  await expect(programApplication.getByText("approved", { exact: true })).toBeVisible();
+  await expect(
+    programApplication.getByText("morgan.volunteer@example.com", { exact: true }),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "People", exact: true }).click();
-  await expect(page.getByText("Pending Caregiver", { exact: true })).toBeVisible();
+  const pendingCaregiver = page
+    .locator("article.admin-person-row")
+    .filter({ hasText: "Pending Caregiver" });
+  await expect(pendingCaregiver).toBeVisible();
+  await pendingCaregiver.getByRole("button", { name: /Pending Caregiver/ }).click();
+  await expect(pendingCaregiver.locator(".admin-person-detail")).toBeVisible();
   await expect(page.getByLabel("Filter by assigned coordinator")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Preapproved signup emails" })).toHaveCount(0);
+  page.once("dialog", (dialog) => dialog.accept());
+  await pendingCaregiver.getByRole("button", { name: "Delete account" }).click();
+  await expect(
+    page.getByText("Account permanently deleted.", { exact: true }),
+  ).toBeVisible();
+  await expect(pendingCaregiver).toHaveCount(0);
+  expect(
+    state.adminUsers.some((user) => user.id === "pending-caregiver"),
+  ).toBe(false);
   await expectHealthyPage(page, state);
 });
 
@@ -1076,10 +1201,13 @@ test("super-admin can oversee administrators in the unified people directory", a
 
   await page.getByRole("button", { name: "People", exact: true }).click();
   await page.getByLabel("Filter by role").selectOption("admin");
-  const superAdminRow = page.getByRole("button", { name: /Jay Administrator/ });
-  await expect(superAdminRow).toBeVisible();
-  await superAdminRow.click();
-  await expect(page.getByText("Administrator", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Delete account" })).toHaveCount(0);
+  const superAdminRecord = page
+    .locator("article.admin-person-row")
+    .filter({ hasText: "Jay" });
+  await expect(superAdminRecord).toBeVisible();
+  await superAdminRecord.getByRole("button", { name: /Jay.*Administrator/ }).click();
+  await expect(superAdminRecord.locator(".admin-person-detail")).toBeVisible();
+  await expect(superAdminRecord.getByText("Jay Super Admin", { exact: true }).first()).toBeVisible();
+  await expect(superAdminRecord.getByRole("button", { name: "Delete account" })).toHaveCount(0);
   await expectHealthyPage(page, state);
 });

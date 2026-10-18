@@ -46,6 +46,49 @@ class FakeAuthAdmin:
 
     def delete_user(self, user_id: str) -> None:
         self._users.pop(user_id, None)
+        deleted_match_ids = {
+            row.get("id")
+            for row in self._client.tables["matches"]
+            if row.get("mentor_id") == user_id or row.get("mentee_id") == user_id
+        }
+        self._client.tables["match_messages"] = [
+            row
+            for row in self._client.tables["match_messages"]
+            if row.get("match_id") not in deleted_match_ids
+            and row.get("sender_id") != user_id
+        ]
+        self._client.tables["volunteer_hours"] = [
+            row
+            for row in self._client.tables["volunteer_hours"]
+            if row.get("match_id") not in deleted_match_ids
+            and row.get("mentor_id") != user_id
+            and row.get("mentee_id") != user_id
+        ]
+        self._client.tables["matches"] = [
+            row
+            for row in self._client.tables["matches"]
+            if row.get("id") not in deleted_match_ids
+        ]
+        for table_name in ("mentor_profiles", "mentee_profiles"):
+            self._client.tables[table_name] = [
+                row for row in self._client.tables[table_name] if row.get("id") != user_id
+            ]
+        for row in self._client.tables["preapproved_emails"]:
+            if row.get("created_by") == user_id:
+                row["created_by"] = None
+            if row.get("claimed_by") == user_id:
+                row["claimed_by"] = None
+        for row in self._client.tables["program_applications"]:
+            if row.get("reviewed_by") == user_id:
+                row["reviewed_by"] = None
+            if row.get("user_id") == user_id:
+                row["user_id"] = None
+        for row in self._client.tables["profiles"]:
+            if row.get("assigned_coordinator") == user_id:
+                row["assigned_coordinator"] = None
+        self._client.tables["profiles"] = [
+            row for row in self._client.tables["profiles"] if row.get("id") != user_id
+        ]
 
 
 class FakeAuth:

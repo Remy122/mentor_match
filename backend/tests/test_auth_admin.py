@@ -82,6 +82,7 @@ def test_auth_update_profile(client, fake_supabase, monkeypatch):
         json={
             "full_name": "Updated Name",
             "university": "McMaster University",
+            "profile_picture_url": "",
             "goals": "better support",
             "interests": ["navigation", "burnout"],
         },
@@ -90,6 +91,7 @@ def test_auth_update_profile(client, fake_supabase, monkeypatch):
     payload = response.json()
     assert payload["profile"]["full_name"] == "Updated Name"
     assert payload["profile"]["university"] == "McMaster University"
+    assert payload["profile"]["profile_picture_url"] is None
     assert payload["mentee_profile"]["goals"] == "better support"
     assert payload["mentee_profile"]["interests"] == ["navigation", "burnout"]
 
@@ -332,6 +334,22 @@ def test_admin_university_scope_preapprovals_and_profile_management(
     )
     assert own_university_edit.status_code == 200
     assert own_university_edit.json()["profile"]["full_name"] == "Updated Toronto Member"
+
+    fake_supabase.users["toronto-mentee"] = {"email": "member@toronto.example"}
+    delete_response = client.post(
+        "/api/admin/users/toronto-mentee/lifecycle",
+        json={"action": "delete"},
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {
+        "message": "Account permanently deleted.",
+        "deleted_user_id": "toronto-mentee",
+    }
+    assert "toronto-mentee" not in fake_supabase.users
+    assert all(
+        row["id"] != "toronto-mentee"
+        for row in fake_supabase.tables["profiles"]
+    )
 
     app.dependency_overrides[require_admin_role] = lambda: AuthUser(
         id="super-admin",

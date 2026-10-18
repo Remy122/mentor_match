@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Camera, Mail, Trash2 } from "lucide-react";
+import { SiInstagram } from "react-icons/si";
 import {
   apiFetch,
   BACKEND_BASE_URL,
@@ -15,6 +17,7 @@ import {
   ONTARIO_POSTSECONDARY_INSTITUTIONS,
 } from "../lib/ontarioUniversities";
 import { supabase, hasSupabaseEnv } from "../lib/supabaseClient";
+import BrandLogo from "../components/BrandLogo";
 
 const EMPTY_ADMIN_INVITE_FORM = {
   email: "",
@@ -78,25 +81,6 @@ const ERROR_MESSAGES = {
   auth: "We couldn't complete your request. Please check your details and try again.",
 };
 
-function HeartMark({ inverted = false }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={`brand-heart ${inverted ? "brand-heart-light" : ""}`}
-    >
-      <svg viewBox="0 0 24 24" fill="none">
-        <path
-          d="M20.8 5.9c-1.7-1.8-4.6-1.8-6.4 0L12 8.3 9.6 5.9a4.5 4.5 0 0 0-6.4 6.3l2.4 2.4L12 21l6.4-6.4 2.4-2.4a4.5 4.5 0 0 0 0-6.3Z"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </span>
-  );
-}
-
 function LineIcon({ name }) {
   const paths = {
     apply: (
@@ -146,11 +130,51 @@ function LineIcon({ name }) {
   );
 }
 
+function FooterContactLinks() {
+  return (
+    <div className="footer-contact-links">
+      <a
+        className="footer-contact-link"
+        href="mailto:youngcaregiverscommunity@clubs.queensu.ca"
+      >
+        <Mail aria-hidden="true" />
+        <span>youngcaregiverscommunity@clubs.queensu.ca</span>
+      </a>
+      <a
+        className="footer-contact-link"
+        href="https://www.instagram.com/queensyoungcaregivers/"
+        target="_blank"
+        rel="noreferrer"
+      >
+        <SiInstagram aria-hidden="true" />
+        <span>@queensyoungcaregivers</span>
+      </a>
+    </div>
+  );
+}
+
+function ProfileAvatar({ name, src, className = "" }) {
+  const initial = (name?.trim().charAt(0) || "U").toUpperCase();
+
+  return (
+    <span
+      className={`profile-avatar ${className}`.trim()}
+      role={src ? "img" : undefined}
+      aria-label={src ? `${name || "User"} profile picture` : undefined}
+      style={src ? { backgroundImage: `url(${src})` } : undefined}
+    >
+      {!src && initial}
+    </span>
+  );
+}
+
 function AdminProgramApplicationCard({
   application,
   isReviewing,
   onReview,
   reviewed = false,
+  expanded = false,
+  onToggle,
 }) {
   const isVolunteer = application.application_type === "volunteer";
   const submittedDate = application.created_at
@@ -176,23 +200,38 @@ function AdminProgramApplicationCard({
 
   return (
     <article
-      className="admin-application-card"
+      className={`admin-application-card${expanded ? " is-expanded" : ""}`}
       data-testid={`program-application-${application.id}`}
     >
       <div className="admin-application-heading">
-        <div>
-          <div className="admin-application-badges">
-            <span>{isVolunteer ? "Peer support volunteer" : "Caregiver"}</span>
-            <span className={`request-status request-status-${application.status}`}>
-              {application.status}
+        <button
+          type="button"
+          className="admin-application-toggle"
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
+          <span className="admin-application-identity">
+            <span className="admin-application-badges">
+              <span>{isVolunteer ? "Peer support volunteer" : "Caregiver"}</span>
+              <span className={`request-status request-status-${application.status}`}>
+                {application.status}
+              </span>
             </span>
-          </div>
-          <h5>{application.preferred_name || application.full_legal_name}</h5>
-          <p>
-            Submitted {submittedDate} · Legal name: {application.full_legal_name}
-          </p>
-        </div>
-        {!reviewed && (
+            <strong>{application.preferred_name || application.full_legal_name}</strong>
+            <small>
+              Submitted {submittedDate} · {formatUniversity(application.university)}
+            </small>
+          </span>
+          <span className="admin-disclosure" aria-hidden="true">
+            {expanded ? "Hide" : "View"}
+            <span>{expanded ? "−" : "+"}</span>
+          </span>
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="admin-application-detail">
+          {!reviewed && (
           <div className="admin-application-actions">
             <button
               type="button"
@@ -211,55 +250,60 @@ function AdminProgramApplicationCard({
               Reject
             </button>
           </div>
-        )}
-      </div>
+          )}
 
-      <section className="admin-application-private">
-        <div>
-          <p>Private screening information</p>
-          <span>Visible to QYCC administrators only</span>
-        </div>
-        <dl>
-          <div>
-            <dt>Email</dt>
-            <dd>{application.email}</dd>
-          </div>
-          <div>
-            <dt>Phone</dt>
-            <dd>{application.phone_number}</dd>
-          </div>
-          <div>
-            <dt>Date of birth</dt>
-            <dd>{dateOfBirth}</dd>
-          </div>
-          <div>
-            <dt>School</dt>
-            <dd>{application.university || "Not affiliated"}</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section className="admin-application-responses">
-        <h6>Application responses</h6>
-        <dl>
-          {responseFields.map(([label, value]) => (
-            <div key={label}>
-              <dt>{label}</dt>
-              <dd>{value || "Not provided"}</dd>
+          <section className="admin-application-private">
+            <div>
+              <p>Contact and screening information</p>
+              <span>Administrator access only</span>
             </div>
-          ))}
-        </dl>
-      </section>
+            <dl>
+              <div>
+                <dt>Legal name</dt>
+                <dd>{application.full_legal_name}</dd>
+              </div>
+              <div>
+                <dt>Email</dt>
+                <dd>{application.email}</dd>
+              </div>
+              <div>
+                <dt>Phone</dt>
+                <dd>{application.phone_number}</dd>
+              </div>
+              <div>
+                <dt>Date of birth</dt>
+                <dd>{dateOfBirth}</dd>
+              </div>
+              <div>
+                <dt>School</dt>
+                <dd>{application.university || "Not affiliated"}</dd>
+              </div>
+            </dl>
+          </section>
 
-      <div className="admin-application-consent">
-        <span aria-hidden="true">✓</span>
-        Privacy and information-sharing consent acknowledged
-        {reviewed && application.reviewed_at && (
-          <small>
-            Reviewed {new Date(application.reviewed_at).toLocaleDateString()}
-          </small>
-        )}
-      </div>
+          <section className="admin-application-responses">
+            <h6>Application responses</h6>
+            <dl>
+              {responseFields.map(([label, value]) => (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{value || "Not provided"}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
+          <div className="admin-application-consent">
+            <span aria-hidden="true">✓</span>
+            Privacy and information-sharing consent acknowledged
+            {reviewed && application.reviewed_at && (
+              <small>
+                Reviewed {new Date(application.reviewed_at).toLocaleDateString()}
+              </small>
+            )}
+          </div>
+        </div>
+      )}
     </article>
   );
 }
@@ -375,6 +419,7 @@ function AdminWorkspace({
   const [onboardingFilter, setOnboardingFilter] = useState("all");
   const [availabilityFilter, setAvailabilityFilter] = useState("all");
   const [coordinatorFilter, setCoordinatorFilter] = useState("all");
+  const [selectedApplicationId, setSelectedApplicationId] = useState("");
   const [selectedPersonId, setSelectedPersonId] = useState("");
   const [personDraft, setPersonDraft] = useState(null);
   const [matchFilter, setMatchFilter] = useState("all");
@@ -396,6 +441,11 @@ function AdminWorkspace({
     selectedPerson && (isSuperAdmin || selectedPerson.role !== "admin"),
   );
   function selectPerson(user) {
+    if (selectedPersonId === user.id) {
+      setSelectedPersonId("");
+      setPersonDraft(null);
+      return;
+    }
     setSelectedPersonId(user.id);
     setPersonDraft({
       preferred_name: user.preferred_name || user.full_name || "",
@@ -433,8 +483,8 @@ function AdminWorkspace({
       {section === "dashboard" && (
         <div className="admin-view-stack">
           <header className="admin-view-header">
-            <p>Action-oriented summary</p>
-            <h3>What needs attention</h3>
+            <h3>Dashboard</h3>
+            <p>Items that need attention and current program activity.</p>
           </header>
           <div className="admin-summary-grid">
             <article><span>New applications</span><strong>{metrics?.new_applications?.length ?? applications.length}</strong></article>
@@ -474,21 +524,46 @@ function AdminWorkspace({
 
       {section === "applications" && (
         <div className="admin-view-stack" id="program-applications">
-          <header className="admin-view-header"><p>Screening queue</p><h3>Applications</h3></header>
-          {applications.map((application) => (
-            <AdminProgramApplicationCard key={application.id} application={application} isReviewing={actionId === application.id} onReview={onReviewApplication} />
-          ))}
-          {applications.length === 0 && <p className="admin-empty">No applications need review.</p>}
-          {reviewedApplications.length > 0 && <h4 className="admin-subheading">Reviewed applications</h4>}
-          {reviewedApplications.map((application) => (
-            <AdminProgramApplicationCard key={application.id} application={application} isReviewing={false} onReview={onReviewApplication} reviewed />
-          ))}
+          <header className="admin-view-header"><h3>Applications</h3><p>Review new submissions and revisit past decisions.</p></header>
+          <section className="admin-record-section">
+            <div className="admin-list-heading"><h4>Awaiting review</h4><span>{applications.length}</span></div>
+            <div className="admin-application-list">
+              {applications.map((application) => (
+                <AdminProgramApplicationCard
+                  key={application.id}
+                  application={application}
+                  isReviewing={actionId === application.id}
+                  onReview={onReviewApplication}
+                  expanded={selectedApplicationId === application.id}
+                  onToggle={() => setSelectedApplicationId((current) => current === application.id ? "" : application.id)}
+                />
+              ))}
+              {applications.length === 0 && <p className="admin-empty">No applications need review.</p>}
+            </div>
+          </section>
+          <section className="admin-record-section">
+            <div className="admin-list-heading"><h4>Past applications</h4><span>{reviewedApplications.length}</span></div>
+            <div className="admin-application-list">
+              {reviewedApplications.map((application) => (
+                <AdminProgramApplicationCard
+                  key={application.id}
+                  application={application}
+                  isReviewing={false}
+                  onReview={onReviewApplication}
+                  reviewed
+                  expanded={selectedApplicationId === application.id}
+                  onToggle={() => setSelectedApplicationId((current) => current === application.id ? "" : application.id)}
+                />
+              ))}
+              {reviewedApplications.length === 0 && <p className="admin-empty">No past applications yet.</p>}
+            </div>
+          </section>
         </div>
       )}
 
       {section === "people" && (
         <div className="admin-view-stack">
-          <header className="admin-view-header"><p>One record per participant</p><h3>People</h3></header>
+          <header className="admin-view-header"><h3>People</h3><p>Select a person to view details and administrative controls.</p></header>
           <div className="admin-filter-grid">
             <select aria-label="Filter by role" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}><option value="all">All roles</option><option value="admin">Administrators</option><option value="mentor">Peer support volunteers</option><option value="mentee">Caregivers</option></select>
             <select aria-label="Filter by institution" value={institutionFilter} onChange={(e) => setInstitutionFilter(e.target.value)}><option value="all">All institutions</option>{institutions.map((item) => <option key={item}>{item}</option>)}</select>
@@ -498,56 +573,70 @@ function AdminWorkspace({
             <select aria-label="Filter by assigned coordinator" value={coordinatorFilter} onChange={(e) => setCoordinatorFilter(e.target.value)}><option value="all">All coordinators</option><option value="unassigned">Unassigned</option>{coordinators.map((coordinator) => <option key={`coordinator-${coordinator.id}`} value={coordinator.id}>{coordinator.preferred_name || coordinator.full_name}</option>)}</select>
           </div>
           <div className="admin-people-list">
-            {filteredUsers.map((user) => (
-              <article key={user.id} className="admin-person-row">
-                <button type="button" onClick={() => selectPerson(user)}>
-                  <strong>{user.preferred_name || user.full_name}</strong>
-                  <span>{roleLabel(user.role)} · {formatUniversity(user.university)}</span>
-                </button>
-                <div><span>{user.account_status ?? "active"}</span><span>{user.onboarding_status ?? "ready"}</span></div>
-              </article>
-            ))}
+            {filteredUsers.map((user) => {
+              const isSelected = selectedPerson?.id === user.id;
+              return (
+                <article key={user.id} className={`admin-person-row${isSelected ? " is-expanded" : ""}`}>
+                  <div className="admin-person-summary">
+                    <button type="button" aria-expanded={isSelected} onClick={() => selectPerson(user)}>
+                      <span className="admin-person-identity">
+                        <ProfileAvatar
+                          name={user.preferred_name || user.full_name}
+                          src={user.profile_picture_url}
+                          className="profile-avatar-list"
+                        />
+                        <span className="admin-person-copy">
+                          <strong>{user.preferred_name || user.full_name}</strong>
+                          <span>{roleLabel(user.role)} · {formatUniversity(user.university)}</span>
+                        </span>
+                      </span>
+                    </button>
+                    <div className="admin-person-status"><span>{user.account_status ?? "active"}</span><span>{user.onboarding_status ?? "ready"}</span><span className="admin-disclosure" aria-hidden="true">{isSelected ? "Hide −" : "View +"}</span></div>
+                  </div>
+                  {isSelected && (
+                    <div className="admin-person-detail">
+                      <dl>
+                        <div><dt>Full name</dt><dd>{selectedPerson.legal_name || selectedPerson.full_name}</dd></div>
+                        <div><dt>Preferred name</dt><dd>{selectedPerson.preferred_name || selectedPerson.full_name}</dd></div>
+                        <div><dt>Email</dt><dd>{selectedPerson.email || "Unavailable"}</dd></div>
+                        <div><dt>Phone</dt><dd>{selectedPerson.phone_number || "Unavailable"}</dd></div>
+                        <div><dt>Institution</dt><dd>{formatUniversity(selectedPerson.university)}</dd></div>
+                        <div><dt>Active matches</dt><dd>{selectedPerson.active_match_count ?? 0}</dd></div>
+                        {selectedPerson.role === "mentor" && <div><dt>Accepting new matches</dt><dd>{selectedPerson.is_visible ? "Yes" : "No"}</dd></div>}
+                      </dl>
+                      {selectedPerson.bio && <section><h5>Bio</h5><p>{selectedPerson.bio}</p></section>}
+                      {selectedPerson.application && <section><h5>Application information</h5><p>{selectedPerson.application.application_type === "volunteer" ? selectedPerson.application.volunteer_motivation : selectedPerson.application.caregiving_situation}</p></section>}
+                      {personDraft && canManageSelected && (
+                        <form className="admin-person-edit-form" onSubmit={(event) => { event.preventDefault(); onSavePerson(selectedPerson.id, personDraft); }}>
+                          <label>Full name<input value={personDraft.legal_name} onChange={(e) => setPersonDraft((current) => ({ ...current, legal_name: e.target.value }))} /></label>
+                          <label>Preferred name<input value={personDraft.preferred_name} onChange={(e) => setPersonDraft((current) => ({ ...current, preferred_name: e.target.value, full_name: e.target.value }))} /></label>
+                          <label>Phone<input value={personDraft.phone_number} onChange={(e) => setPersonDraft((current) => ({ ...current, phone_number: e.target.value }))} /></label>
+                          <label>Institution<select value={personDraft.university} onChange={(e) => setPersonDraft((current) => ({ ...current, university: e.target.value }))}><option value="">Not currently affiliated with a school</option>{ONTARIO_POSTSECONDARY_INSTITUTIONS.map((institution) => <option key={`person-${institution}`} value={institution}>{institution}</option>)}</select></label>
+                          <label>Onboarding<select value={personDraft.onboarding_status} onChange={(e) => setPersonDraft((current) => ({ ...current, onboarding_status: e.target.value }))}><option value="profile_pending">Profile pending</option><option value="training">Training</option><option value="ready">Ready</option></select></label>
+                          <label>Assigned coordinator<select value={personDraft.assigned_coordinator} onChange={(e) => setPersonDraft((current) => ({ ...current, assigned_coordinator: e.target.value }))}><option value="">Unassigned</option>{coordinators.map((coordinator) => <option key={`assign-${coordinator.id}`} value={coordinator.id}>{coordinator.preferred_name || coordinator.full_name}</option>)}</select></label>
+                          {selectedPerson.role === "mentor" && <label className="admin-checkbox"><input type="checkbox" checked={personDraft.is_visible} onChange={(e) => setPersonDraft((current) => ({ ...current, is_visible: e.target.checked }))} />Accepting new matches</label>}
+                          <label className="admin-person-bio">Bio<textarea rows={3} value={personDraft.bio} onChange={(e) => setPersonDraft((current) => ({ ...current, bio: e.target.value }))} /></label>
+                          <button type="submit">Save profile</button>
+                        </form>
+                      )}
+                      {canManageSelected && !selectedPerson.is_super_admin && <div className="admin-detail-actions">
+                        {selectedPerson.account_status === "suspended" ? <button type="button" onClick={() => onLifecycle(selectedPerson.id, "reactivate")}>Reactivate</button> : <button type="button" onClick={() => onLifecycle(selectedPerson.id, "suspend")}>Suspend</button>}
+                        <button type="button" className="danger" onClick={() => onLifecycle(selectedPerson.id, "delete")}>Delete account</button>
+                      </div>}
+                      {!canManageSelected && <p className="admin-empty">Only the super-admin can edit administrator accounts.</p>}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+            {filteredUsers.length === 0 && <p className="admin-empty">No people match these filters.</p>}
           </div>
-          {selectedPerson && (
-            <article className="admin-person-detail">
-              <div className="admin-detail-heading"><div><p>{roleLabel(selectedPerson.role)}</p><h4>{selectedPerson.preferred_name || selectedPerson.full_name}</h4></div><button type="button" onClick={() => setSelectedPersonId("")}>Close</button></div>
-              <dl>
-                <div><dt>Full name</dt><dd>{selectedPerson.legal_name || selectedPerson.full_name}</dd></div>
-                <div><dt>Preferred name</dt><dd>{selectedPerson.preferred_name || selectedPerson.full_name}</dd></div>
-                <div><dt>Email</dt><dd>{selectedPerson.email || "Unavailable"}</dd></div>
-                <div><dt>Phone</dt><dd>{selectedPerson.phone_number || "Unavailable"}</dd></div>
-                <div><dt>Institution</dt><dd>{formatUniversity(selectedPerson.university)}</dd></div>
-                <div><dt>Active matches</dt><dd>{selectedPerson.active_match_count ?? 0}</dd></div>
-                {selectedPerson.role === "mentor" && <div><dt>Accepting new matches</dt><dd>{selectedPerson.is_visible ? "Yes" : "No"}</dd></div>}
-              </dl>
-              {selectedPerson.bio && <section><h5>Bio</h5><p>{selectedPerson.bio}</p></section>}
-              {selectedPerson.application && <section><h5>Application information</h5><p>{selectedPerson.application.application_type === "volunteer" ? selectedPerson.application.volunteer_motivation : selectedPerson.application.caregiving_situation}</p></section>}
-              {personDraft && canManageSelected && (
-                <form className="admin-person-edit-form" onSubmit={(event) => { event.preventDefault(); onSavePerson(selectedPerson.id, personDraft); }}>
-                  <label>Full name<input value={personDraft.legal_name} onChange={(e) => setPersonDraft((current) => ({ ...current, legal_name: e.target.value }))} /></label>
-                  <label>Preferred name<input value={personDraft.preferred_name} onChange={(e) => setPersonDraft((current) => ({ ...current, preferred_name: e.target.value, full_name: e.target.value }))} /></label>
-                  <label>Phone<input value={personDraft.phone_number} onChange={(e) => setPersonDraft((current) => ({ ...current, phone_number: e.target.value }))} /></label>
-                  <label>Institution<select value={personDraft.university} onChange={(e) => setPersonDraft((current) => ({ ...current, university: e.target.value }))}><option value="">Not currently affiliated with a school</option>{ONTARIO_POSTSECONDARY_INSTITUTIONS.map((institution) => <option key={`person-${institution}`} value={institution}>{institution}</option>)}</select></label>
-                  <label>Onboarding<select value={personDraft.onboarding_status} onChange={(e) => setPersonDraft((current) => ({ ...current, onboarding_status: e.target.value }))}><option value="profile_pending">Profile pending</option><option value="training">Training</option><option value="ready">Ready</option></select></label>
-                  <label>Assigned coordinator<select value={personDraft.assigned_coordinator} onChange={(e) => setPersonDraft((current) => ({ ...current, assigned_coordinator: e.target.value }))}><option value="">Unassigned</option>{coordinators.map((coordinator) => <option key={`assign-${coordinator.id}`} value={coordinator.id}>{coordinator.preferred_name || coordinator.full_name}</option>)}</select></label>
-                  {selectedPerson.role === "mentor" && <label className="admin-checkbox"><input type="checkbox" checked={personDraft.is_visible} onChange={(e) => setPersonDraft((current) => ({ ...current, is_visible: e.target.checked }))} />Accepting new matches</label>}
-                  <label className="admin-person-bio">Bio<textarea rows={3} value={personDraft.bio} onChange={(e) => setPersonDraft((current) => ({ ...current, bio: e.target.value }))} /></label>
-                  <button type="submit">Save profile</button>
-                </form>
-              )}
-              {canManageSelected && !selectedPerson.is_super_admin && <div className="admin-detail-actions">
-                {selectedPerson.account_status === "suspended" ? <button type="button" onClick={() => onLifecycle(selectedPerson.id, "reactivate")}>Reactivate</button> : <button type="button" onClick={() => onLifecycle(selectedPerson.id, "suspend")}>Suspend</button>}
-                <button type="button" className="danger" onClick={() => onLifecycle(selectedPerson.id, "delete")}>Delete account</button>
-              </div>}
-              {!canManageSelected && <p className="admin-empty">Only the super-admin can edit administrator accounts.</p>}
-            </article>
-          )}
         </div>
       )}
 
       {section === "matches" && (
         <div className="admin-view-stack">
-          <header className="admin-view-header"><p>Current and archived support</p><h3>Matches</h3></header>
+          <header className="admin-view-header"><h3>Matches</h3><p>Review active requests and closed support relationships.</p></header>
           <select className="admin-match-filter" aria-label="Filter match status" value={matchFilter} onChange={(e) => setMatchFilter(e.target.value)}><option value="all">All matches</option><option value="requested">Requested</option><option value="active">Active</option><option value="closed">Closed archive</option></select>
           <div className="admin-match-list">
             {filteredMatches.map((match) => (
@@ -623,12 +712,17 @@ export default function Home() {
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState("");
   const [profileSaveMessage, setProfileSaveMessage] = useState("");
+  const [profilePictureFile, setProfilePictureFile] = useState(null);
+  const [profilePicturePreviewUrl, setProfilePicturePreviewUrl] = useState("");
+  const [shouldRemoveProfilePicture, setShouldRemoveProfilePicture] =
+    useState(false);
   const [profileForm, setProfileForm] = useState({
     role: "mentee",
     username: "",
     fullName: "",
     university: "",
     bio: "",
+    profilePictureUrl: "",
     isVisible: false,
     sameUniversityOnly: true,
     mentorMode: "Remote",
@@ -818,16 +912,6 @@ export default function Home() {
     () => adminUsers.find((user) => user.id === adminEditingUserId) ?? null,
     [adminEditingUserId, adminUsers],
   );
-  const userInitial = useMemo(
-    () =>
-      (
-        profileForm.fullName?.trim().charAt(0) ||
-        emailInput?.trim().charAt(0) ||
-        "U"
-      ).toUpperCase(),
-    [emailInput, profileForm.fullName],
-  );
-
   useEffect(() => {
     if (activeMenteeConnections.length === 0) {
       setMentorHoursForm((current) => ({ ...current, matchId: "" }));
@@ -844,6 +928,15 @@ export default function Home() {
       }));
     }
   }, [activeMenteeConnections, mentorHoursForm.matchId]);
+
+  useEffect(
+    () => () => {
+      if (profilePicturePreviewUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(profilePicturePreviewUrl);
+      }
+    },
+    [profilePicturePreviewUrl],
+  );
 
   useEffect(() => {
     if (!hasSupabaseEnv || !supabase) return;
@@ -981,6 +1074,7 @@ export default function Home() {
               ? ""
               : profile.university ?? "",
           bio: profile.bio ?? "",
+          profilePictureUrl: profile.profile_picture_url ?? "",
           isVisible: Boolean(profile.is_visible),
           sameUniversityOnly: profile.same_university_only !== false,
           mentorMode: mentorAvailabilityInfo.mentorMode,
@@ -988,6 +1082,9 @@ export default function Home() {
           goals: menteeProfile.goals ?? "",
           interests: (menteeProfile.interests ?? []).join(", "),
         });
+        setProfilePictureFile(null);
+        setProfilePicturePreviewUrl("");
+        setShouldRemoveProfilePicture(false);
       } catch (_error) {
         setProfileError(ERROR_MESSAGES.profile);
       } finally {
@@ -1073,6 +1170,36 @@ export default function Home() {
     showMenteeExperience,
   ]);
 
+  function handleProfilePictureChange(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setProfileError("Choose a JPG, PNG, or WebP image.");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setProfileError("Choose an image smaller than 5 MB.");
+      event.target.value = "";
+      return;
+    }
+
+    setProfileError("");
+    setProfileSaveMessage("");
+    setProfilePictureFile(file);
+    setProfilePicturePreviewUrl(URL.createObjectURL(file));
+    setShouldRemoveProfilePicture(false);
+  }
+
+  function handleRemoveProfilePicture() {
+    setProfilePictureFile(null);
+    setProfilePicturePreviewUrl("");
+    setShouldRemoveProfilePicture(true);
+    setProfileSaveMessage("");
+    setProfileForm((current) => ({ ...current, profilePictureUrl: "" }));
+  }
+
   async function handleSaveProfile() {
     const token = window.localStorage.getItem("ocgoAccessToken");
     if (!token) {
@@ -1086,6 +1213,7 @@ export default function Home() {
       full_name: profileForm.fullName.trim(),
       university: profileForm.university,
       bio: profileForm.bio.trim(),
+      profile_picture_url: profileForm.profilePictureUrl,
       is_visible: profileForm.isVisible,
       same_university_only: profileForm.sameUniversityOnly,
       availability: buildMentorAvailability(
@@ -1124,6 +1252,35 @@ export default function Home() {
     setProfileSaveMessage("");
 
     try {
+      const userId = profileData?.profile?.id;
+      if ((profilePictureFile || shouldRemoveProfilePicture) && (!supabase || !userId)) {
+        throw new Error();
+      }
+
+      if (profilePictureFile) {
+        const storagePath = `${userId}/avatar`;
+        const { error: uploadError } = await supabase.storage
+          .from("profile-pictures")
+          .upload(storagePath, profilePictureFile, {
+            cacheControl: "3600",
+            contentType: profilePictureFile.type,
+            upsert: true,
+          });
+        if (uploadError) throw uploadError;
+
+        const { data: publicUrlData } = supabase.storage
+          .from("profile-pictures")
+          .getPublicUrl(storagePath);
+        if (!publicUrlData?.publicUrl) throw new Error();
+        payload.profile_picture_url = `${publicUrlData.publicUrl}?v=${Date.now()}`;
+      } else if (shouldRemoveProfilePicture) {
+        const { error: removeError } = await supabase.storage
+          .from("profile-pictures")
+          .remove([`${userId}/avatar`]);
+        if (removeError) throw removeError;
+        payload.profile_picture_url = "";
+      }
+
       const response = await apiFetch(`${BACKEND_BASE_URL}/api/auth/me`, {
         method: "PATCH",
         headers: {
@@ -1154,6 +1311,7 @@ export default function Home() {
             ? ""
             : updatedProfile.university ?? "",
         bio: updatedProfile.bio ?? "",
+        profilePictureUrl: updatedProfile.profile_picture_url ?? "",
         isVisible: Boolean(updatedProfile.is_visible),
         sameUniversityOnly: updatedProfile.same_university_only !== false,
         mentorMode: updatedMentorAvailabilityInfo.mentorMode,
@@ -1161,6 +1319,9 @@ export default function Home() {
         goals: updatedMentee.goals ?? "",
         interests: (updatedMentee.interests ?? []).join(", "),
       });
+      setProfilePictureFile(null);
+      setProfilePicturePreviewUrl("");
+      setShouldRemoveProfilePicture(false);
       setProfileSaveMessage("Profile saved.");
     } catch (_error) {
       setProfileError(ERROR_MESSAGES.save);
@@ -1720,6 +1881,14 @@ export default function Home() {
   async function handleAccountLifecycle(userId, action) {
     const token = window.localStorage.getItem("ocgoAccessToken");
     if (!token) return;
+    if (
+      action === "delete" &&
+      !window.confirm(
+        "Permanently delete this account and its profile? This cannot be undone.",
+      )
+    ) {
+      return;
+    }
     setAdminActionUserId(userId);
     setAdminError("");
     setAdminSuccess("");
@@ -1735,6 +1904,17 @@ export default function Home() {
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(data?.detail || ERROR_MESSAGES.action);
       setAdminSuccess(data.message || "Account updated.");
+      if (action === "delete") {
+        setAdminUsers((current) =>
+          current.filter((user) => user.id !== userId),
+        );
+        setAdminPendingUsers((current) =>
+          current.filter((user) => user.id !== userId),
+        );
+        setAdminReviewedUsers((current) =>
+          current.filter((user) => user.id !== userId),
+        );
+      }
       await loadAdminDashboardData();
     } catch (error) {
       setAdminError(error.message || ERROR_MESSAGES.action);
@@ -2431,6 +2611,7 @@ export default function Home() {
       fullName: "",
       university: "",
       bio: "",
+      profilePictureUrl: "",
       isVisible: false,
       sameUniversityOnly: true,
       mentorMode: "Remote",
@@ -2438,6 +2619,9 @@ export default function Home() {
       goals: "",
       interests: "",
     });
+    setProfilePictureFile(null);
+    setProfilePicturePreviewUrl("");
+    setShouldRemoveProfilePicture(false);
   }
 
   function handleRequestAnotherMentor() {
@@ -2473,33 +2657,14 @@ export default function Home() {
             <button
               type="button"
               className="site-brand-link"
-              aria-label="QYCC home"
+              aria-label="Young Caregiver Community home"
               onClick={() => showHomePage()}
             >
-              <HeartMark />
-              <div>
-                <p className="site-brand-title">Peer support program for young caregivers</p>
-                <p className="site-brand-subtitle">Made by Queen&apos;s Young Caregivers Community (QYCC)</p>
-              </div>
+              <BrandLogo tagline="Peer support for young caregivers" />
             </button>
           ) : (
-            <div className="flex min-w-0 items-center gap-3">
-              <span
-                aria-hidden="true"
-                className="font-display flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#2a3723] text-lg text-[#dcbc98]"
-              >
-                C
-              </span>
-              <div>
-                <>
-                  <p className="text-[0.7rem] font-bold uppercase tracking-[0.14em] text-[#2a3723]">
-                    Peer Support Portal
-                  </p>
-                  <p className="max-w-52 text-base font-bold leading-tight text-[#0c0a08] sm:max-w-none sm:text-lg">
-                    Caregiver Volunteer Matching
-                  </p>
-                </>
-              </div>
+            <div className="portal-brand">
+              <BrandLogo tagline="Caregiver volunteer matching" />
             </div>
           )}
           {showPublicSiteHeader && (
@@ -2548,7 +2713,11 @@ export default function Home() {
                 className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-[#b9bba8] bg-[#f4f2ec] text-sm font-bold text-[#2a3723]"
                 aria-label="Open profile menu"
               >
-                {userInitial}
+                <ProfileAvatar
+                  name={profileForm.fullName || emailInput}
+                  src={profilePicturePreviewUrl || profileForm.profilePictureUrl}
+                  className="profile-avatar-header"
+                />
               </button>
 
               {isProfileMenuOpen && (
@@ -2592,7 +2761,6 @@ export default function Home() {
             <section className="site-hero">
               <div className="site-shell hero-layout">
                 <div className="hero-copy">
-                  <p className="community-pill"><LineIcon name="community" /> Queen&apos;s Young Caregivers Community</p>
                   <h1>Peer support, from<br />people who <em>get it.</em></h1>
                   <p className="hero-description">
                     We connect young caregivers with trained peer support volunteers who&apos;ve lived through caregiving themselves; people close to your age, your campus, your situation.
@@ -2683,8 +2851,7 @@ export default function Home() {
             <footer className="site-footer">
               <div className="site-shell footer-grid">
                 <div>
-                  <p className="footer-brand"><HeartMark inverted /> <span>QYCC</span></p>
-                  <p>Queen&apos;s Young Caregivers Community</p>
+                  <div className="footer-brand"><BrandLogo inverted tagline="Peer support for young caregivers" /></div>
                 </div>
                 <div>
                   <h3>Get involved</h3>
@@ -2694,8 +2861,7 @@ export default function Home() {
                 </div>
                 <div>
                   <h3>Contact</h3>
-                  <a href="mailto:youngcaregiverscommunity@clubs.queensu.ca">youngcaregiverscommunity@clubs.queensu.ca</a>
-                  <a href="https://www.instagram.com/queensyoungcaregivers/" target="_blank" rel="noreferrer">IG: @queensyoungcaregivers</a>
+                  <FooterContactLinks />
                 </div>
               </div>
               <div className="site-shell footer-bottom">
@@ -2776,8 +2942,7 @@ export default function Home() {
             <footer className="site-footer">
               <div className="site-shell footer-grid">
                 <div>
-                  <p className="footer-brand"><HeartMark inverted /> <span>QYCC</span></p>
-                  <p>Queen&apos;s Young Caregivers Community</p>
+                  <div className="footer-brand"><BrandLogo inverted tagline="Peer support for young caregivers" /></div>
                 </div>
                 <div>
                   <h3>Get involved</h3>
@@ -2787,8 +2952,7 @@ export default function Home() {
                 </div>
                 <div>
                   <h3>Contact</h3>
-                  <a href="mailto:youngcaregiverscommunity@clubs.queensu.ca">youngcaregiverscommunity@clubs.queensu.ca</a>
-                  <a href="https://www.instagram.com/queensyoungcaregivers/" target="_blank" rel="noreferrer">IG: @queensyoungcaregivers</a>
+                  <FooterContactLinks />
                 </div>
               </div>
               <div className="site-shell footer-bottom">
@@ -3051,8 +3215,7 @@ export default function Home() {
             <footer className="site-footer">
               <div className="site-shell footer-grid">
                 <div>
-                  <p className="footer-brand"><HeartMark inverted /> <span>QYCC</span></p>
-                  <p>Queen&apos;s Young Caregivers Community</p>
+                  <div className="footer-brand"><BrandLogo inverted tagline="Peer support for young caregivers" /></div>
                 </div>
                 <div>
                   <h3>Get involved</h3>
@@ -3062,8 +3225,7 @@ export default function Home() {
                 </div>
                 <div>
                   <h3>Contact</h3>
-                  <a href="mailto:youngcaregiverscommunity@clubs.queensu.ca">youngcaregiverscommunity@clubs.queensu.ca</a>
-                  <a href="https://www.instagram.com/queensyoungcaregivers/" target="_blank" rel="noreferrer">IG: @queensyoungcaregivers</a>
+                  <FooterContactLinks />
                 </div>
               </div>
               <div className="site-shell footer-bottom">
@@ -3318,8 +3480,7 @@ export default function Home() {
             <footer className="site-footer">
               <div className="site-shell footer-grid">
                 <div>
-                  <p className="footer-brand"><HeartMark inverted /> <span>QYCC</span></p>
-                  <p>Queen&apos;s Young Caregivers Community</p>
+                  <div className="footer-brand"><BrandLogo inverted tagline="Peer support for young caregivers" /></div>
                 </div>
                 <div>
                   <h3>Get involved</h3>
@@ -3329,8 +3490,7 @@ export default function Home() {
                 </div>
                 <div>
                   <h3>Contact</h3>
-                  <a href="mailto:youngcaregiverscommunity@clubs.queensu.ca">youngcaregiverscommunity@clubs.queensu.ca</a>
-                  <a href="https://www.instagram.com/queensyoungcaregivers/" target="_blank" rel="noreferrer">IG: @queensyoungcaregivers</a>
+                  <FooterContactLinks />
                 </div>
               </div>
               <div className="site-shell footer-bottom">
@@ -5514,16 +5674,23 @@ export default function Home() {
                         }`}
                       >
                         <div className="mb-3 flex items-start justify-between gap-2">
-                          <div>
-                            <h4 className="text-lg font-bold text-[#0c0a08]">
-                              {volunteer.name}
-                            </h4>
-                            <p className="text-sm text-[#59604f]">
-                              {volunteer.city}
-                            </p>
-                            <p className="mt-1 text-sm font-semibold text-[#2a3723]">
-                              {volunteer.university}
-                            </p>
+                          <div className="volunteer-card-identity">
+                            <ProfileAvatar
+                              name={volunteer.name}
+                              src={volunteer.profilePictureUrl}
+                              className="profile-avatar-card"
+                            />
+                            <div>
+                              <h4 className="text-lg font-bold text-[#0c0a08]">
+                                {volunteer.name}
+                              </h4>
+                              <p className="text-sm text-[#59604f]">
+                                {volunteer.city}
+                              </p>
+                              <p className="mt-1 text-sm font-semibold text-[#2a3723]">
+                                {volunteer.university}
+                              </p>
+                            </div>
                           </div>
                           {showMenteeExperience && isSelected && (
                             <span className="rounded-full bg-[#2a3723] px-3 py-1 text-xs font-bold text-white">
@@ -5840,6 +6007,48 @@ export default function Home() {
 
               {!isProfileLoading && (
                 <div className="mt-5 grid gap-3 md:grid-cols-2">
+                  <div className="profile-photo-editor md:col-span-2">
+                    <ProfileAvatar
+                      name={profileForm.fullName || emailInput}
+                      src={profilePicturePreviewUrl || profileForm.profilePictureUrl}
+                      className="profile-avatar-settings"
+                    />
+                    <div className="profile-photo-controls">
+                      <p className="text-sm font-bold text-[#2a3723]">
+                        Profile picture
+                      </p>
+                      <div className="profile-photo-actions">
+                        <label
+                          htmlFor="profile-picture-upload"
+                          className="profile-photo-action"
+                        >
+                          <Camera aria-hidden="true" />
+                          Choose photo
+                        </label>
+                        <input
+                          id="profile-picture-upload"
+                          aria-label="Upload profile picture"
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          onChange={handleProfilePictureChange}
+                          className="sr-only"
+                        />
+                        {(profilePicturePreviewUrl || profileForm.profilePictureUrl) && (
+                          <button
+                            type="button"
+                            onClick={handleRemoveProfilePicture}
+                            className="profile-photo-action profile-photo-remove"
+                          >
+                            <Trash2 aria-hidden="true" />
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-xs text-[#59604f]">
+                        JPG, PNG, or WebP. Maximum 5 MB.
+                      </p>
+                    </div>
+                  </div>
                   <div className="flex flex-col gap-2">
                     <label
                       htmlFor="profile-username"

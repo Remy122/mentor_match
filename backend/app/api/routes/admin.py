@@ -22,7 +22,7 @@ from app.schemas.admin import (
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 ADMIN_USER_COLUMNS = (
-    "id,role,username,full_name,legal_name,preferred_name,phone_number,bio,"
+    "id,role,username,full_name,legal_name,preferred_name,phone_number,bio,profile_picture_url,"
     "university,approval_status,is_visible,same_university_only,is_super_admin,"
     "program_application_id,account_status,onboarding_status,assigned_coordinator,"
     "stage_started_at,suspended_at,created_at,"
@@ -563,6 +563,26 @@ def update_account_lifecycle(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The super-admin account cannot be suspended or deleted.",
         )
+
+    if payload.action == "delete":
+        try:
+            supabase.auth.admin.delete_user(user_id)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="The account could not be permanently deleted.",
+            ) from exc
+
+        try:
+            supabase.storage.from_("profile-pictures").remove([f"{user_id}/avatar"])
+        except Exception:
+            pass
+
+        return {
+            "message": "Account permanently deleted.",
+            "deleted_user_id": user_id,
+        }
+
     now = datetime.now(timezone.utc).isoformat()
     if payload.action == "reactivate":
         updates = {
@@ -572,7 +592,7 @@ def update_account_lifecycle(
         }
     else:
         updates = {
-            "account_status": "deleted" if payload.action == "delete" else "suspended",
+            "account_status": "suspended",
             "suspended_at": now,
             "is_visible": False,
             "stage_started_at": now,

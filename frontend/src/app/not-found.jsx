@@ -1,36 +1,13 @@
 import Link from "next/link";
-
-function HeartMark() {
-  return (
-    <span aria-hidden="true" className="brand-heart">
-      <svg viewBox="0 0 24 24" fill="none">
-        <path
-          d="M20.8 5.9c-1.7-1.8-4.6-1.8-6.4 0L12 8.3 9.6 5.9a4.5 4.5 0 0 0-6.4 6.3l2.4 2.4L12 21l6.4-6.4 2.4-2.4a4.5 4.5 0 0 0 0-6.3Z"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </span>
-  );
-}
+import BrandLogo, { BrandMark } from "../components/BrandLogo";
 
 export default function NotFound() {
   return (
     <div className="not-found-page">
       <header className="site-header not-found-header">
         <div className="site-shell site-header-inner not-found-header-inner">
-          <Link href="/" className="site-brand-link" aria-label="QYCC home">
-            <HeartMark />
-            <div>
-              <p className="site-brand-title">
-                Peer support program for young caregivers
-              </p>
-              <p className="site-brand-subtitle">
-                Made by Queen&apos;s Young Caregivers Community (QYCC)
-              </p>
-            </div>
+          <Link href="/" className="site-brand-link" aria-label="Young Caregiver Community home">
+            <BrandLogo tagline="Peer support for young caregivers" />
           </Link>
           <Link href="/" className="not-found-header-home">
             Home
@@ -61,7 +38,7 @@ export default function NotFound() {
             <span className="not-found-ring not-found-ring-one" />
             <span className="not-found-ring not-found-ring-two" />
             <span className="not-found-heart">
-              <HeartMark />
+              <BrandMark />
             </span>
             <strong>404</strong>
           </div>

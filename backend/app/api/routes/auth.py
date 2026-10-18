@@ -227,7 +227,7 @@ def update_me(payload: ProfileUpdateRequest, current_user: AuthUser = Depends(re
     if payload.bio is not None:
         profile_updates["bio"] = payload.bio
     if payload.profile_picture_url is not None:
-        profile_updates["profile_picture_url"] = payload.profile_picture_url
+        profile_updates["profile_picture_url"] = payload.profile_picture_url or None
     if payload.university is not None:
         if target_role == "admin":
             raise HTTPException(

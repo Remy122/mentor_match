@@ -76,44 +76,93 @@ h2 {
   text-align: left;
 }
 
-.site-brand-link:hover .site-brand-title {
+.site-brand-link:hover .brand-logo-name {
   color: #283722;
 }
 
-.brand-heart {
+.brand-logo {
   display: inline-flex;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
+  min-width: 0;
   align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: #283722;
-  color: #f1ede4;
+  gap: 0.75rem;
 }
 
-.brand-heart svg {
-  width: 18px;
-  height: 18px;
+.brand-mark {
+  --brand-mark-field: #283722;
+  --brand-mark-link-one: #f4f1e8;
+  --brand-mark-link-two: #dcbc98;
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
 }
 
-.brand-heart-light {
-  background: #dcc09f;
-  color: #283722;
+.brand-mark svg {
+  width: 100%;
+  height: 100%;
 }
 
-.site-brand-title {
+.brand-mark-field {
+  fill: var(--brand-mark-field);
+}
+
+.brand-mark-link-one,
+.brand-mark-link-two,
+.brand-mark-bridge {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 4;
+}
+
+.brand-mark-link-one,
+.brand-mark-bridge {
+  stroke: var(--brand-mark-link-one);
+}
+
+.brand-mark-link-two {
+  stroke: var(--brand-mark-link-two);
+}
+
+.brand-mark-inverted {
+  --brand-mark-field: #f4f1e8;
+  --brand-mark-link-one: #283722;
+  --brand-mark-link-two: #b4774f;
+}
+
+.brand-logo-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+.brand-logo-name {
+  color: #171812;
   font-family: var(--font-fraunces), Georgia, "Times New Roman", serif;
-  font-size: 0.98rem;
-  font-weight: 700;
+  font-size: 1rem;
+  font-weight: 750;
+  letter-spacing: 0;
   line-height: 1.15;
+  white-space: nowrap;
 }
 
-.site-brand-subtitle {
-  margin-top: 2px;
+.brand-logo-tagline {
   color: #64645d;
-  font-size: 0.68rem;
+  font-size: 0.7rem;
+  letter-spacing: 0;
   line-height: 1.2;
+}
+
+.brand-logo-inverted .brand-logo-name {
+  color: #fff;
+}
+
+.brand-logo-inverted .brand-logo-tagline {
+  color: #c4c9ba;
+}
+
+.portal-brand {
+  min-width: 0;
 }
 
 .site-nav {
@@ -264,9 +313,10 @@ h2 {
   transform: rotate(9deg);
 }
 
-.not-found-heart .brand-heart {
+.not-found-heart .brand-mark {
   width: 52px;
   height: 52px;
+  flex-basis: 52px;
 }
 
 .not-found-ring {
@@ -325,27 +375,8 @@ h2 {
   max-width: 760px;
 }
 
-.community-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
-  border-radius: 999px;
-  background: #dcddd2;
-  padding: 0.45rem 0.9rem;
-  color: #31402c;
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.community-pill .line-icon {
-  width: 18px;
-  height: 18px;
-  background: transparent;
-  color: #31402c;
-}
-
 .hero-copy h1 {
-  margin-top: 1.6rem;
+  margin-top: 0;
   font-size: clamp(3.5rem, 5.5vw, 5.8rem);
   font-weight: 650;
   letter-spacing: -0.045em;
@@ -569,14 +600,7 @@ h2 {
 }
 
 .footer-brand {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
   margin-bottom: 0.9rem;
-  color: white;
-  font-family: var(--font-fraunces), Georgia, "Times New Roman", serif;
-  font-size: 1.25rem;
-  font-weight: 700;
 }
 
 .footer-grid h3 {
@@ -599,6 +623,122 @@ h2 {
 .footer-grid a:hover,
 .footer-grid button:hover {
   color: white;
+}
+
+.footer-contact-links {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.footer-grid .footer-contact-link {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: flex-start;
+  gap: 0.55rem;
+}
+
+.footer-contact-link svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin-top: 0.12rem;
+  stroke-width: 1.8;
+}
+
+.footer-contact-link span {
+  overflow-wrap: anywhere;
+}
+
+.profile-avatar {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 50%;
+  background-color: #dfe2d5;
+  background-position: center;
+  background-size: cover;
+  color: #2a3723;
+  font-weight: 800;
+}
+
+.profile-avatar-header {
+  width: 100%;
+  height: 100%;
+}
+
+.profile-avatar-settings {
+  width: 5rem;
+  height: 5rem;
+  font-size: 1.5rem;
+}
+
+.profile-avatar-card {
+  width: 3rem;
+  height: 3rem;
+  font-size: 1rem;
+}
+
+.profile-avatar-list {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.profile-photo-editor {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  border-bottom: 1px solid #e4e2da;
+  padding-bottom: 1rem;
+}
+
+.profile-photo-controls {
+  display: grid;
+  min-width: 0;
+  gap: 0.45rem;
+}
+
+.profile-photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.profile-photo-action {
+  display: inline-flex;
+  cursor: pointer;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid #b9bba8;
+  border-radius: 0.4rem;
+  background: #fff;
+  padding: 0.55rem 0.75rem;
+  color: #2a3723;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.profile-photo-action:hover {
+  border-color: #2a3723;
+  background: #f4f2ec;
+}
+
+.profile-photo-action svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.profile-photo-remove {
+  color: #991b1b;
+}
+
+.volunteer-card-identity {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 0.75rem;
 }
 
 .footer-bottom {
@@ -907,20 +1047,18 @@ h2 {
     min-height: 68px;
   }
 
-  .brand-heart {
-    width: 34px;
-    height: 34px;
-    flex-basis: 34px;
+  .brand-mark {
+    width: 38px;
+    height: 38px;
+    flex-basis: 38px;
   }
 
-  .site-brand-title {
-    max-width: 220px;
-    font-size: 0.8rem;
-  }
-
-  .site-brand-title,
-  .site-brand-subtitle {
+  .brand-logo-copy {
     display: none;
+  }
+
+  .site-footer .brand-logo-copy {
+    display: grid;
   }
 
   .site-nav {
@@ -1195,17 +1333,45 @@ textarea::placeholder {
 .admin-application-card {
   overflow: hidden;
   border: 1px solid #cfcec4;
-  border-radius: 14px;
+  border-radius: 6px;
   background: #fff;
-  box-shadow: 0 10px 30px rgb(40 55 34 / 7%);
 }
 
 .admin-application-heading {
+  padding: 0;
+}
+
+.admin-application-toggle {
   display: flex;
-  align-items: flex-start;
+  width: 100%;
+  align-items: center;
   justify-content: space-between;
-  gap: 1.5rem;
-  padding: 1.5rem;
+  gap: 1rem;
+  border: 0;
+  background: transparent;
+  padding: 1rem;
+  color: inherit;
+  text-align: left;
+}
+
+.admin-application-toggle:hover,
+.admin-application-toggle:focus-visible {
+  background: #f7f6f1;
+}
+
+.admin-application-identity {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.admin-application-identity > strong {
+  color: #0c0a08;
+  font-size: 1rem;
+}
+
+.admin-application-identity > small {
+  color: #676a61;
+  font-size: 0.78rem;
 }
 
 .admin-application-badges {
@@ -1216,28 +1382,12 @@ textarea::placeholder {
 }
 
 .admin-application-badges > span:first-child {
-  border-radius: 999px;
-  background: #dfe2d5;
+  border-radius: 3px;
+  background: #eef0e8;
   color: #2a3723;
   padding: 0.25rem 0.65rem;
   font-size: 0.7rem;
   font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.admin-application-heading h5 {
-  color: #0c0a08;
-  font-family: var(--font-fraunces), Georgia, "Times New Roman", serif;
-  font-size: 1.75rem;
-  font-weight: 650;
-  line-height: 1.1;
-}
-
-.admin-application-heading p {
-  margin-top: 0.45rem;
-  color: #676a61;
-  font-size: 0.78rem;
 }
 
 .admin-application-actions {
@@ -1245,11 +1395,13 @@ textarea::placeholder {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.65rem;
+  border-top: 1px solid #e2dfd5;
+  padding: 1rem;
 }
 
 .admin-application-actions button {
   min-height: 40px;
-  border-radius: 8px;
+  border-radius: 4px;
   padding: 0.55rem 0.9rem;
   font-size: 0.78rem;
   font-weight: 750;
@@ -1275,9 +1427,9 @@ textarea::placeholder {
   display: grid;
   grid-template-columns: minmax(170px, 0.45fr) minmax(0, 1.55fr);
   gap: 1.5rem;
-  border-block: 1px solid #e2dfd5;
-  background: #f7f3eb;
-  padding: 1.25rem 1.5rem;
+  border-top: 1px solid #e2dfd5;
+  background: #f8f7f3;
+  padding: 1rem;
 }
 
 .admin-application-private > div > p,
@@ -1285,8 +1437,6 @@ textarea::placeholder {
   color: #2a3723;
   font-size: 0.73rem;
   font-weight: 850;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .admin-application-private > div > span {
@@ -1320,7 +1470,8 @@ textarea::placeholder {
 }
 
 .admin-application-responses {
-  padding: 1.5rem;
+  border-top: 1px solid #e2dfd5;
+  padding: 1rem;
 }
 
 .admin-application-responses dl {
@@ -1331,11 +1482,9 @@ textarea::placeholder {
 }
 
 .admin-application-responses dl > div {
-  min-height: 96px;
-  border: 1px solid #e0ded5;
-  border-radius: 9px;
-  background: #fbfaf7;
-  padding: 0.9rem;
+  min-height: 0;
+  border-left: 2px solid #d6d8ce;
+  padding: 0.15rem 0.8rem;
 }
 
 .admin-application-responses dd {
@@ -1352,7 +1501,7 @@ textarea::placeholder {
   gap: 0.55rem;
   border-top: 1px solid #e2dfd5;
   color: #506049;
-  padding: 0.9rem 1.5rem;
+  padding: 0.9rem 1rem;
   font-size: 0.72rem;
   font-weight: 700;
 }
@@ -1375,14 +1524,8 @@ textarea::placeholder {
 }
 
 @media (max-width: 760px) {
-  .admin-application-heading,
   .admin-application-private {
     grid-template-columns: 1fr;
-  }
-
-  .admin-application-heading {
-    align-items: stretch;
-    flex-direction: column;
   }
 
   .admin-application-actions {
@@ -1411,7 +1554,7 @@ textarea::placeholder {
 
 .admin-workspace-v2 {
   display: grid;
-  gap: 1.5rem;
+  gap: 1.25rem;
 }
 
 .admin-primary-tabs {
@@ -1427,7 +1570,7 @@ textarea::placeholder {
   background: transparent;
   padding: 0.9rem 1.15rem;
   color: #59604f;
-  font-weight: 750;
+  font-weight: 650;
 }
 
 .admin-primary-tabs button.active {
@@ -1443,24 +1586,37 @@ textarea::placeholder {
   gap: 1rem;
 }
 
-.admin-view-header p,
 .admin-detail-heading p {
   color: #59604f;
   font-size: 0.75rem;
   font-weight: 800;
-  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
+.admin-view-header {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.admin-view-header p {
+  color: #59604f;
+  font-size: 0.9rem;
+}
+
 .admin-view-header h3 {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(2rem, 4vw, 3.25rem);
+  font-family: inherit;
+  font-size: 1.75rem;
+  font-weight: 750;
 }
 
 .admin-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.8rem;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid #d3d1c8;
+  border-radius: 6px;
+  background: #fff;
 }
 
 .admin-summary-grid article,
@@ -1468,7 +1624,7 @@ textarea::placeholder {
 .admin-person-detail,
 .admin-match-detail {
   border: 1px solid #d3d1c8;
-  border-radius: 0.75rem;
+  border-radius: 6px;
   background: #fff;
   padding: 1.1rem;
 }
@@ -1476,11 +1632,18 @@ textarea::placeholder {
 .admin-summary-grid article {
   display: grid;
   gap: 0.45rem;
+  border: 0;
+  border-right: 1px solid #e4e2da;
+  border-radius: 0;
+}
+
+.admin-summary-grid article:last-child {
+  border-right: 0;
 }
 
 .admin-summary-grid strong {
   color: #2a3723;
-  font-size: 2rem;
+  font-size: 1.65rem;
 }
 
 .admin-action-group > div:first-child,
@@ -1500,7 +1663,7 @@ textarea::placeholder {
   background: transparent;
   color: #2a3723;
   font-weight: 700;
-  text-decoration: underline;
+  text-decoration: none;
 }
 
 .admin-action-row {
@@ -1529,6 +1692,41 @@ textarea::placeholder {
   gap: 0.75rem;
 }
 
+.admin-record-section {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.admin-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid #d3d1c8;
+  padding-bottom: 0.55rem;
+}
+
+.admin-list-heading h4 {
+  font-size: 1rem;
+  font-weight: 750;
+}
+
+.admin-list-heading span {
+  min-width: 1.75rem;
+  border-radius: 3px;
+  background: #eef0e8;
+  padding: 0.2rem 0.45rem;
+  color: #2a3723;
+  font-size: 0.75rem;
+  font-weight: 750;
+  text-align: center;
+}
+
+.admin-application-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
 .admin-filter-grid select,
 .admin-person-edit-form input,
 .admin-person-edit-form select,
@@ -1547,35 +1745,90 @@ textarea::placeholder {
   display: grid;
   overflow: hidden;
   border: 1px solid #d3d1c8;
-  border-radius: 0.75rem;
+  border-radius: 6px;
   background: #fff;
 }
 
 .admin-person-row {
+  border-bottom: 1px solid #e4e2da;
+}
+
+.admin-person-row:last-child {
+  border-bottom: 0;
+}
+
+.admin-person-row.is-expanded {
+  background: #fbfaf7;
+}
+
+.admin-person-summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  border-bottom: 1px solid #e4e2da;
-  padding: 1rem;
+  padding: 0.9rem 1rem;
 }
 
-.admin-person-row > button,
+.admin-person-summary > button,
 .admin-match-list > button {
   flex: 1;
   border: 0;
   background: transparent;
 }
 
-.admin-person-row > div {
+.admin-person-summary > button {
+  display: grid;
+  gap: 0.2rem;
+  text-align: left;
+}
+
+.admin-person-identity {
   display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.admin-person-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.admin-person-row .profile-avatar-list {
+  color: #2a3723;
+  font-size: 0.85rem;
+}
+
+.admin-person-status {
+  display: flex;
+  align-items: center;
   gap: 0.5rem;
 }
 
-.admin-person-row > div span {
-  border-radius: 999px;
+.admin-person-status > span:not(.admin-disclosure) {
+  border-radius: 3px;
   background: #eef0e8;
   padding: 0.3rem 0.6rem;
+}
+
+.admin-disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #2a3723;
+  font-size: 0.78rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.admin-application-toggle .admin-disclosure > span {
+  font-size: 1rem;
+}
+
+.admin-person-row > .admin-person-detail {
+  margin: 0 1rem 1rem;
+  border-radius: 4px;
+  background: #fff;
 }
 
 .admin-person-detail dl,
@@ -1721,7 +1974,6 @@ textarea::placeholder {
 }
 
 @media (max-width: 800px) {
-  .admin-summary-grid,
   .admin-filter-grid,
   .admin-person-edit-form,
   .admin-person-detail dl,
@@ -1729,6 +1981,32 @@ textarea::placeholder {
   .request-disclosure-list,
   .request-sharing-preview dl {
     grid-template-columns: 1fr;
+  }
+
+  .admin-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-summary-grid article:nth-child(2) {
+    border-right: 0;
+  }
+
+  .admin-summary-grid article:nth-child(-n + 2) {
+    border-bottom: 1px solid #e4e2da;
+  }
+
+  .admin-person-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-person-status {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .admin-person-status .admin-disclosure {
+    margin-left: auto;
   }
 }
 

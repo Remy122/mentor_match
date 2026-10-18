@@ -68,6 +68,7 @@ export function normalizeMentor(mentor) {
     city: availabilityInfo.mentorMode,
     availability: availabilityInfo.availability || "Not listed",
     bio: mentor.bio ?? "No bio provided yet.",
+    profilePictureUrl: mentor.profile_picture_url ?? "",
   };
 }
 
