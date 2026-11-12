@@ -2761,7 +2761,7 @@ export default function Home() {
             <section className="site-hero">
               <div className="site-shell hero-layout">
                 <div className="hero-copy">
-                  <h1>Peer support, from<br />people who <em>get it.</em></h1>
+                  <h1>Peer support, from{" "}<br />people who <em>get it.</em></h1>
                   <p className="hero-description">
                     We connect young caregivers with trained peer support volunteers who&apos;ve lived through caregiving themselves; people close to your age, your campus, your situation.
                   </p>
@@ -2835,7 +2835,7 @@ export default function Home() {
             <section className="volunteer-callout">
               <div className="site-shell callout-layout">
                 <div>
-                  <h2>We&apos;re looking for volunteers and<br />student leaders, especially outside<br />Queen&apos;s.</h2>
+                  <h2>We&apos;re looking for volunteers and{" "}<br />student leaders, especially outside{" "}<br />Queen&apos;s.</h2>
                   <p>If you&apos;ve cared for a family member and you&apos;re at another university or college, this is a chance to bring peer support and caregiver advocacy to your own campus. Apply to be a volunteer and let us know you&apos;re interested!</p>
                 </div>
                 <button
